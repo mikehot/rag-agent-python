@@ -229,3 +229,9 @@ def test_hidden_arguments_are_not_shown_to_the_model_and_are_rejected_if_sent() 
         {"query": "q", "knowledgeBaseId": "00000000-0000-0000-0000-000000000101"},
     )
     assert problem and "unknown argument" in problem
+
+
+def test_the_empty_reply_retry_can_be_switched_off_for_comparison() -> None:
+    chat = ScriptedChat(call("search_knowledge", {"query": "q"}), say(""))
+    result = run_agent("q", FakeTools(), chat, Limits(retry_empty_reply=False))
+    assert result.stop_reason == "empty_answer" and result.turns == 2

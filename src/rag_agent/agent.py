@@ -65,6 +65,9 @@ class ChatBackend(Protocol):
 class Limits:
     max_turns: int = 4
     max_tool_calls: int = 3
+    # One changed retry after an empty model reply that follows tool results. A switch so that the
+    # retry can be evaluated against its absence on the same questions.
+    retry_empty_reply: bool = True
 
 
 @dataclass(frozen=True)
@@ -170,7 +173,7 @@ def run_agent(
                 result.answer, result.stop_reason = text, "answered"
                 return result
             result.stop_reason = "empty_answer"
-            if nudged or not result.trace:
+            if nudged or not result.trace or not limits.retry_empty_reply:
                 return result
             # One retry, only after tool results were seen: an empty reply to a bare question is
             # not the failure this addresses.

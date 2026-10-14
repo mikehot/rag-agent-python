@@ -63,6 +63,11 @@ def main() -> int:
     parser.add_argument("--label", required=True)
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--no-empty-retry",
+        action="store_true",
+        help="disable the single changed retry after an empty model reply (for A/B comparison)",
+    )
     args = parser.parse_args()
 
     cases = [
@@ -74,7 +79,9 @@ def main() -> int:
 
     per_run = []
     for run in range(1, args.repeats + 1):
-        rows = run_once(cases, args.kb_url, creds, chat, Limits())
+        rows = run_once(
+            cases, args.kb_url, creds, chat, Limits(retry_empty_reply=not args.no_empty_retry)
+        )
         (args.out_dir / f"{args.label}.run{run}.jsonl").write_text(
             "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
         )
@@ -98,7 +105,10 @@ def main() -> int:
     tool_outcomes = Counter(o for rows in per_run for r in rows for _, o in r["trace"])
 
     print(f"\n### {args.label}\n")
-    print(f"Dataset `{args.dataset.name}`, {len(cases)} cases, {args.repeats} run(s).")
+    retry = "off" if args.no_empty_retry else "on"
+    print(
+        f"Dataset `{args.dataset.name}`, {len(cases)} cases, {args.repeats} run(s), empty-reply retry {retry}."
+    )
     mean = statistics.mean(totals)
     spread = f"{min(totals)}–{max(totals)}"
     print(f"\n**Passed: mean {mean:.1f}/{len(cases)}, range {spread}.**")
