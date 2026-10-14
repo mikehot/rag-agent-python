@@ -63,6 +63,15 @@ def system_prompt(policy: str = "single") -> str:
     return SYSTEM_PROMPT if policy == "single" else SYSTEM_PROMPT + "\n" + DECOMPOSE_ADDENDUM
 
 
+# Some model servers leak a chat-template control marker (seen as "<|channel>") at the start of
+# free-text content. It is never part of an answer.
+CONTROL_MARKER = re.compile(r"<\|[^<>\n|]{1,40}\|?>")
+
+
+def clean_answer(text: str) -> str:
+    return CONTROL_MARKER.sub("", text).strip()
+
+
 NO_ANSWER = "抱歉，我没能在限定步骤内得到可靠的答案。"
 
 
@@ -186,7 +195,7 @@ def run_agent(
             return result
 
         if not turn.tool_calls:
-            text = (turn.content or "").strip()
+            text = clean_answer(turn.content or "")
             if text:
                 result.answer, result.stop_reason = text, "answered"
                 return result

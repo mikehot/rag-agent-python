@@ -255,3 +255,16 @@ def test_the_selected_policy_reaches_the_model_as_the_system_message() -> None:
     chat = ScriptedChat(say("ok"))
     run_agent("q", FakeTools(), chat, policy="decompose")
     assert "拆成彼此独立" in chat.seen[0][0]["content"]
+
+
+def test_a_leaked_control_marker_is_removed_from_the_answer() -> None:
+    from rag_agent.agent import clean_answer
+
+    assert clean_answer("<|channel>根据资料，答案是六个月。") == "根据资料，答案是六个月。"
+    assert clean_answer("答案<|im_end|>") == "答案"
+    assert clean_answer("普通文本 a < b 和 c > d") == "普通文本 a < b 和 c > d"
+    result = run_agent("q", FakeTools(), ScriptedChat(say("<|channel>最终答案")))
+    assert result.answer == "最终答案"
+    assert (
+        run_agent("q", FakeTools(), ScriptedChat(say("<|channel>"))).stop_reason == "empty_answer"
+    )
