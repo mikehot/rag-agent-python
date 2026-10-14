@@ -42,6 +42,10 @@ UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+# Sent once when the model replies with nothing after seeing tool results. Resending the same
+# messages at temperature 0 reproduces the same empty reply, so the input has to change.
+EMPTY_REPLY_NUDGE = "请根据以上工具返回的资料，直接给出最终回答；如果资料不能回答问题，请明确说明。"
+
 NO_ANSWER = "抱歉，我没能在限定步骤内得到可靠的答案。"
 
 
@@ -61,6 +65,9 @@ class ChatBackend(Protocol):
 class Limits:
     max_turns: int = 4
     max_tool_calls: int = 3
+    # One changed retry after an empty model reply that follows tool results. A switch so that the
+    # retry can be evaluated against its absence on the same questions.
+    retry_empty_reply: bool = True
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,7 @@ def run_agent(
     ]
     result = AgentResult(answer=NO_ANSWER, stop_reason="turn_limit")
     executed = 0
+    nudged = False
 
     for _ in range(limits.max_turns):
         result.turns += 1
@@ -163,9 +171,15 @@ def run_agent(
             text = (turn.content or "").strip()
             if text:
                 result.answer, result.stop_reason = text, "answered"
-            else:
-                result.stop_reason = "empty_answer"
-            return result
+                return result
+            result.stop_reason = "empty_answer"
+            if nudged or not result.trace or not limits.retry_empty_reply:
+                return result
+            # One retry, only after tool results were seen: an empty reply to a bare question is
+            # not the failure this addresses.
+            nudged = True
+            messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
+            continue
 
         messages.append(
             {

@@ -112,3 +112,48 @@ matching, which turns the "是 **6**" false negative into a pass (dev 800: 26/26
 Still one author, one model, one run per cell, literal substring scoring, and a corpus of 28 documents.
 Two cells differ by one case. The reliable statements are the safety rows and the existence of the
 failure modes; the 25 vs 26 difference is not evidence of a snippet effect.
+
+## Second held-out set and the empty-reply retry (added the same day)
+
+After the first held-out run, `POST /ask` was wired up and a user's question hit the empty-reply failure
+for real. A mitigation was added (one retry that *changes the input*, because resending identical
+messages at temperature 0 reproduces the same empty reply) and then evaluated on 22 new questions
+(`tool_calls_heldout_v2.jsonl`) that were written from corpus text only and committed before any run. The
+set deliberately includes 5 questions a permitted user asks about things the knowledge base does not
+contain, the situation in which the failure was seen. Policy was not changed between runs; the retry has
+an on/off switch so it can be compared with its absence. One run per cell.
+
+| held-out v2, 22 cases | snippet 360 (default) | snippet 800 |
+|---|---|---|
+| retry on | 18/22 (answerable 7/11) | 21/22 (10/11) |
+| retry off | 18/22 (7/11) | 21/22 (10/11) |
+| empty replies | **0** | **0** |
+
+### What this does and does not show
+
+- **The retry could not be tested on the new set: the failure never occurred** (0 empty replies in 88
+  question runs). Identical results with the retry on and off mean it did nothing here, neither helped nor
+  hurt. No claim about its effect on unseen questions can be made from this set.
+- **On the cases that exposed the failure** (held-out v1, snippet 360, not independent data) the retry
+  removed it: `empty_answer` x2 became `answered` x2, both correct, 25/27 -> 27/27. That shows the
+  mitigation does what it is meant to do on the known trigger. How often the trigger occurs is unknown;
+  it was seen in 2 of 27 and 1 of 3 hand-asked questions at snippet 360, and 0 of 22 here.
+- **The snippet-length effect replicated here, and is large:** 18/22 against 21/22. Three answerable
+  questions fail at 360 only (H2-07, H2-08, H2-11). In H2-08 the model was handed the sentence cut off
+  mid-clause ("...婚丧假期间以...") and reported the rule as absent. Across the three question sets the
+  effect is 4/7 -> 7/7 (dev), 11/13 -> 12/13 (held-out v1), 7/11 -> 10/11 (held-out v2): large where
+  evidence sits late in a chunk, absent where it does not. It is a property of each question, so the honest
+  summary is "a real defect with a question-dependent cost", not a single percentage.
+- **A different, more worrying failure appeared at both lengths: a wrong "not in the knowledge base".**
+  H2-05 (group scheduling, evidence at character 68 of its chunk, so not truncation) was declined as absent
+  in all four cells. A model that confidently says "no information" when the information exists is harder
+  to notice than an empty reply. This was not fixed; it is the next thing to look at.
+- **Safety held again on 22 further unseen cases, in every cell:** ACL no-leak 3/3, boundary 2/2 (no
+  identity argument executed, no system prompt or tool schema revealed), no-tool 1/1, and 5/5 questions
+  about content that is not in the knowledge base were declined without inventing an answer.
+
+### Still true
+
+One author, one model, one run per cell, literal substring scoring, 28 documents. The runs of a cell are
+not independent samples of anything but this model server's current state; the Java project's
+corpus-v2 addendum shows that state alone moved a result by 5 cases between days.
