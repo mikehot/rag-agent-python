@@ -53,13 +53,14 @@ The graph reproduces the loop's second run exactly. What differs is the **first*
 session against all later ones. The engine is not the cause; the model server's state (a cold start of
 that prompt set against a warm one) changes the output of a temperature-0 request.
 
-Consequences for every number in this repository:
+Consequences, as first written and as corrected after the re-check
+(`recheck-first-run-effect-local-2026-10-14.md`):
 
-- A "same session, repeated" run is not independent evidence, and a *first* run is not interchangeable
-  with later ones. Results quoted per cell elsewhere were mostly first runs.
-- Totals can hide this. Both engines scored 9/12 on `single` with two different questions flipped.
-- It is consistent with, and a candidate explanation for, the 43/45 against 38/45 gap the Java project
-  recorded between two days. It is **not** proof of it; that was a different harness and a fresh stack.
+- The first run of a set can differ in answer text and in *which* questions pass, so a per-question claim
+  from a single run is weak. Totals hid a swap here: both engines scored 9/12 with two questions exchanged.
+- **Correction:** I first wrote that this was a candidate explanation of the Java project's 43/45 against
+  38/45. Re-running the agent sets 3 to 7 times each showed that this effect changed texts and one pair of
+  questions but never a total, so it does not explain a 5-case gap. That gap is still unexplained.
 
 ## What this does not show
 

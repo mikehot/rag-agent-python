@@ -20,9 +20,11 @@ than 1.** Met: +3, control +0. Read as an observation on twelve questions, not a
 
 ## What the answers show
 
-The three questions `single` missed were each answered from one document only: XD-09 never retrieved the
-"important data" half, XD-01 never retrieved the Job chunk, and XD-10 answered the minors question from the
-personal-information law instead of the labour law. Under `decompose` each fact appeared with the right
+In the first run the three questions `single` missed were each answered from one document only: XD-09
+never retrieved the "important data" half, XD-01 never retrieved the Job chunk, and XD-10 answered the
+minors question from the personal-information law instead of the labour law. Over seven runs, XD-09 and
+XD-10 failed every time, while XD-01 and XD-03 traded places (see the re-check report); `decompose` passed
+all twelve in all five runs. Under `decompose` each fact appeared with the right
 document. I read all twelve; the passes are not coincidental term matches.
 
 Note that `single` is not strictly single-query: in 4 of 12 questions the model searched twice on its own.
