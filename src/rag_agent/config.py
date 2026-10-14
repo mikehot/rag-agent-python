@@ -31,3 +31,16 @@ class Settings(BaseSettings):
 
     max_turns: int = 4
     max_tool_calls: int = 3
+
+
+def unknown_settings(environ: dict[str, str]) -> list[str]:
+    """Names of RAG_AGENT_* variables that this version does not know.
+
+    Settings ignore extras on purpose (a shared environment may carry unrelated variables), but a
+    misspelled or unsupported RAG_AGENT_* name would otherwise be dropped silently and the service
+    would run with a default the operator did not intend.
+    """
+    known = {f"RAG_AGENT_{name}".upper() for name in Settings.model_fields}
+    return sorted(
+        k for k in environ if k.upper().startswith("RAG_AGENT_") and k.upper() not in known
+    )

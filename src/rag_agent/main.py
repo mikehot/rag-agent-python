@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from rag_agent import __version__
 from rag_agent.agent import AgentResult, ChatBackend, Limits, ToolBackend, run_agent
-from rag_agent.config import Settings
+from rag_agent.config import Settings, unknown_settings
 from rag_agent.graph import run_graph_agent
 from rag_agent.llm import ChatClient
 from rag_agent.mcp_client import McpClient, McpError
@@ -83,6 +84,8 @@ def create_app(
     chat: ChatBackend | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    for name in unknown_settings(dict(os.environ)):
+        log.warning("ignoring unknown setting %s (not supported by this version)", name)
     kb_factory = kb_factory or default_kb_factory
     chat = chat or ChatClient(
         base_url=settings.llm_base_url,

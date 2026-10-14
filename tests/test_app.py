@@ -206,3 +206,15 @@ def test_policy_setting_reaches_the_model_and_defaults_to_single() -> None:
     client, _ = build(chat=Spy(AssistantTurn("好的")), policy="decompose")
     assert client.post("/ask", json={"question": "q"}, headers=AUTH).status_code == 200
     assert "拆成彼此独立" in seen[0]
+
+
+def test_unknown_agent_settings_are_reported_not_silently_ignored(monkeypatch) -> None:
+    from rag_agent.config import unknown_settings
+
+    environ = {
+        "RAG_AGENT_POLICY": "decompose",
+        "RAG_AGENT_POLICYY": "decompose",
+        "RAG_AGENT_made_up": "1",
+        "UNRELATED": "x",
+    }
+    assert unknown_settings(environ) == ["RAG_AGENT_POLICYY", "RAG_AGENT_made_up"]
