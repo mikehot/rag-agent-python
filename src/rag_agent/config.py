@@ -24,5 +24,10 @@ class Settings(BaseSettings):
     # "loop" is the reference implementation; "graph" is the same agent as a LangGraph StateGraph.
     engine: Literal["loop", "graph"] = "loop"
 
+    # "single" is what every evaluation before the cross-document one measured; "decompose" adds
+    # one prompt paragraph asking the model to split multi-part questions (see the cross-document
+    # report).
+    policy: Literal["single", "decompose"] = "single"
+
     max_turns: int = 4
     max_tool_calls: int = 3

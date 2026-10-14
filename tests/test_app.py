@@ -192,3 +192,17 @@ def test_the_graph_engine_serves_the_same_answer() -> None:
 
 def test_engine_defaults_to_the_reference_loop() -> None:
     assert Settings().engine == "loop"
+
+
+def test_policy_setting_reaches_the_model_and_defaults_to_single() -> None:
+    assert Settings().policy == "single"
+    seen: list[str] = []
+
+    class Spy(Scripted):
+        def complete(self, messages, tools) -> AssistantTurn:
+            seen.append(messages[0]["content"])
+            return super().complete(messages, tools)
+
+    client, _ = build(chat=Spy(AssistantTurn("好的")), policy="decompose")
+    assert client.post("/ask", json={"question": "q"}, headers=AUTH).status_code == 200
+    assert "拆成彼此独立" in seen[0]

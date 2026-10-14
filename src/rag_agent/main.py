@@ -109,7 +109,7 @@ def create_app(
         request_id = uuid.uuid4().hex[:12]
         try:
             with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
-                result = runner(request.question, kb, chat, limits)
+                result = runner(request.question, kb, chat, limits, settings.policy)
         except McpError as exc:
             # Never log the question or the token; the status and our own request id are enough.
             log.warning("request=%s knowledge base error status=%s", request_id, exc.status)
