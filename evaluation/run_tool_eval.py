@@ -107,7 +107,8 @@ def main() -> int:
     print(f"\n### {args.label}\n")
     retry = "off" if args.no_empty_retry else "on"
     print(
-        f"Dataset `{args.dataset.name}`, {len(cases)} cases, {args.repeats} run(s), empty-reply retry {retry}."
+        f"Dataset `{args.dataset.name}`, {len(cases)} cases, {args.repeats} run(s), "
+        f"empty-reply retry {retry}."
     )
     mean = statistics.mean(totals)
     spread = f"{min(totals)}–{max(totals)}"
