@@ -19,6 +19,7 @@ Early scaffold. What exists today:
 | `POST /ask` | done: runs the bounded agent loop with the caller's own bearer token |
 | MCP client for the Java service | done: offline contract tests + 12 live tests (skipped without a knowledge base) |
 | Bounded tool-calling loop | done: turn and tool-call limits, local argument validation, hidden scope arguments |
+| LangGraph version of the same agent | done: `RAG_AGENT_ENGINE=graph`; matches the loop on 16 scripted scenarios and on 5 live sets; see [the report](evaluation/reports/langgraph-local-2026-10-14.md) |
 | Tool-call evaluation | done: 26 dev + 27 held-out cases, one run per cell; see [the report](evaluation/reports/tool-calls-v1-local-2026-10-14.md) |
 
 ## Try it
