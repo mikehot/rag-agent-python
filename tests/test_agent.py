@@ -188,3 +188,27 @@ def test_placeholder_uuid_is_rejected_locally_and_the_model_can_retry() -> None:
         )
         is None
     )
+
+
+def test_hidden_arguments_are_not_shown_to_the_model_and_are_rejected_if_sent() -> None:
+    from rag_agent.agent import to_openai_tools, visible_schema
+
+    scoped = Tool(
+        name="search_knowledge",
+        description="Search",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "knowledgeBaseId": {"type": "string", "format": "uuid"},
+            },
+            "required": ["query"],
+        },
+    )
+    shown = to_openai_tools([scoped])[0]["function"]["parameters"]
+    assert list(shown["properties"]) == ["query"]
+    problem = validate_arguments(
+        visible_schema(scoped),
+        {"query": "q", "knowledgeBaseId": "00000000-0000-0000-0000-000000000101"},
+    )
+    assert problem and "unknown argument" in problem
