@@ -69,3 +69,46 @@ the result is 26/26.
 - **Small, one author.** 26 cases written by the person who built the agent; scoring is literal substring
   matching (see the false negative above) and does not judge faithfulness or completeness.
 - **Nothing here compares models.** Only one local model was run.
+
+## Held-out replication (added the same day)
+
+A second set, `tool_calls_heldout_v1.jsonl` (27 cases), was written *after* the agent policy was frozen,
+with nothing from any agent output: facts were read from corpus documents the first set did not use
+(init containers, ReplicationController, hostname override, pod conditions, probation pay, minimum hiring
+age, service-period penalties, the privacy officer threshold, withdrawal of consent, core-data fines).
+Each accepted term was checked to occur in its source document and not in its own question, and the set
+was committed before it was run. It was run once per configuration. Policy v2 was not changed afterwards.
+
+| Same scorer, same policy | snippet 360 (default) | snippet 800 |
+|---|---|---|
+| dev set, 26 cases (the policy was tuned on these) | 22/26 (answerable 3/7) | 26/26 (7/7) |
+| **held-out set, 27 cases** | **25/27** (answerable 11/13) | **26/27** (12/13) |
+
+The scorer was updated before the held-out set was written: markdown emphasis is now stripped before
+matching, which turns the "是 **6**" false negative into a pass (dev 800: 26/26).
+
+### What this changes about the earlier conclusion
+
+- **The large snippet effect did not replicate.** On the dev set 3/7 became 7/7. On the held-out set it is
+  11/13 against 12/13, and the two failures at 360 are not truncation (below). The truncation defect is
+  real, and demonstrated on specific cases (evidence at character 457 of 635), but how often it costs an
+  answer depends on where in a chunk the evidence sits; these 13 questions mostly did not hit it. Treat
+  the dev-set jump as an upper bound that reflects how the dev cases were found.
+- **Safety held up on unseen cases.** In both configurations on the held-out set: 5/5 ACL no-leak, 3/3
+  boundary (no identity-bearing argument executed, no tool definitions or system prompt revealed, no
+  claimed modification), 2/2 out of scope, 2/2 list documents, 2/2 no tool.
+- **A new failure mode appeared.** At snippet 360, HO-07 and HO-12 ended with `empty_answer`: after the tool
+  result the model generated 4 tokens and stopped with empty content, deterministically at temperature 0.
+  The loop reported it as such rather than inventing an answer. Retrying once on an empty reply is an
+  obvious mitigation and is deliberately **not** applied here, because changing the policy after seeing
+  held-out results would turn this set into a second dev set.
+- **One wrong-source answer at 800.** HO-03 asked about a ReplicationController's `restartPolicy`; the
+  answer stated the correct rule ("only `Always` is allowed") but attributed it to Deployment, so its
+  "answer point 1" (the rule for this controller) was not met by the literal rule. It is a retrieval/
+  attribution weakness, not a leak; counted as a failure.
+
+### What still limits these numbers
+
+Still one author, one model, one run per cell, literal substring scoring, and a corpus of 28 documents.
+Two cells differ by one case. The reliable statements are the safety rows and the existence of the
+failure modes; the 25 vs 26 difference is not evidence of a snippet effect.

@@ -19,7 +19,7 @@ Early scaffold. What exists today:
 | `POST /ask` | **placeholder**, returns `501`; the loop below is not wired to HTTP yet |
 | MCP client for the Java service | done: offline contract tests + 12 live tests (skipped without a knowledge base) |
 | Bounded tool-calling loop | done: turn and tool-call limits, local argument validation, hidden scope arguments |
-| Tool-call evaluation | done: 26 cases, one run per configuration; see [the report](evaluation/reports/tool-calls-v1-local-2026-10-14.md) |
+| Tool-call evaluation | done: 26 dev + 27 held-out cases, one run per cell; see [the report](evaluation/reports/tool-calls-v1-local-2026-10-14.md) |
 
 ## What was learned so far
 
@@ -30,8 +30,8 @@ The full account, including what the numbers do not show, is in the
 
 ## Plan
 
-1. ~~MCP client with contract tests~~, ~~bounded agent loop~~, ~~tool-call evaluation~~ (first pass).
-2. A held-out question set, and repeats that include a model-server restart.
+1. ~~MCP client with contract tests~~, ~~bounded agent loop~~, ~~tool-call evaluation~~, ~~held-out set~~.
+2. Repeats that include a model-server restart; a retry for empty model replies, judged on a *new* held-out set.
 3. Wire the loop to `POST /ask`, then: LangGraph wrapper, streaming, multi-turn memory.
 
 Everything runs locally against a local model. No hosted service is assumed.
