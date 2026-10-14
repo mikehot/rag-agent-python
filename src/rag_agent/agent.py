@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from rag_agent.llm import AssistantTurn, LlmError
+from rag_agent.llm import AssistantTurn, LlmError, ToolCall
 from rag_agent.mcp_client import McpError, Tool, ToolResult
 
 PROMPT_VERSION = "agent-prompt-v2"
@@ -167,6 +167,67 @@ def validate_arguments(schema: dict[str, Any], arguments: Any) -> str | None:
     return None
 
 
+def assistant_message(turn: AssistantTurn) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": turn.content or "",
+        "tool_calls": [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_raw},
+            }
+            for call in turn.tool_calls
+        ],
+    }
+
+
+def execute_call(
+    call: ToolCall,
+    by_name: dict[str, Tool],
+    tools_backend: ToolBackend,
+    result: AgentResult,
+    messages: list[dict[str, Any]],
+) -> int:
+    """Validate and run one model-requested tool call, recording it in ``result`` and ``messages``.
+
+    Shared by the plain loop and the LangGraph version so that both apply exactly the same checks.
+    Returns 1 when the call reached the knowledge base (it counts against the tool budget), else 0.
+    """
+    tool = by_name.get(call.name)
+    if tool is None:
+        result.trace.append(ToolTrace(call.name, None, "rejected_unknown_tool"))
+        messages.append(tool_message(call.id, "error: no such tool"))
+        return 0
+    try:
+        arguments = json.loads(call.arguments_raw or "{}")
+    except json.JSONDecodeError:
+        arguments = None
+    problem = validate_arguments(visible_schema(tool), arguments)
+    if problem:
+        result.trace.append(ToolTrace(call.name, None, "rejected_arguments"))
+        messages.append(
+            tool_message(call.id, f"error: {problem}. Fix the arguments and call the tool again.")
+        )
+        return 0
+    try:
+        tool_result = tools_backend.call_tool(call.name, arguments)
+    except McpError:
+        result.trace.append(ToolTrace(call.name, arguments, "transport_error", True))
+        messages.append(tool_message(call.id, "error: the knowledge base is unavailable"))
+        return 1
+    outcome = "tool_error" if tool_result.is_error else "ok"
+    result.trace.append(ToolTrace(call.name, arguments, outcome, tool_result.is_error))
+    if tool_result.is_error:
+        messages.append(tool_message(call.id, "error: the tool refused this request"))
+    else:
+        collect_retrieved(result, tool_result)
+        messages.append(
+            tool_message(call.id, json.dumps(tool_result.structured or {}, ensure_ascii=False))
+        )
+    return 1
+
+
 def run_agent(
     question: str,
     tools_backend: ToolBackend,
@@ -208,60 +269,12 @@ def run_agent(
             messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
             continue
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": turn.content or "",
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {"name": call.name, "arguments": call.arguments_raw},
-                    }
-                    for call in turn.tool_calls
-                ],
-            }
-        )
+        messages.append(assistant_message(turn))
         for call in turn.tool_calls:
             if executed >= limits.max_tool_calls:
                 result.stop_reason = "tool_budget"
                 return result
-            tool = by_name.get(call.name)
-            if tool is None:
-                result.trace.append(ToolTrace(call.name, None, "rejected_unknown_tool"))
-                messages.append(tool_message(call.id, "error: no such tool"))
-                continue
-            try:
-                arguments = json.loads(call.arguments_raw or "{}")
-            except json.JSONDecodeError:
-                arguments = None
-            problem = validate_arguments(visible_schema(tool), arguments)
-            if problem:
-                result.trace.append(ToolTrace(call.name, None, "rejected_arguments"))
-                messages.append(
-                    tool_message(
-                        call.id, f"error: {problem}. Fix the arguments and call the tool again."
-                    )
-                )
-                continue
-            executed += 1
-            try:
-                tool_result = tools_backend.call_tool(call.name, arguments)
-            except McpError:
-                result.trace.append(ToolTrace(call.name, arguments, "transport_error", True))
-                messages.append(tool_message(call.id, "error: the knowledge base is unavailable"))
-                continue
-            outcome = "tool_error" if tool_result.is_error else "ok"
-            result.trace.append(ToolTrace(call.name, arguments, outcome, tool_result.is_error))
-            if tool_result.is_error:
-                messages.append(tool_message(call.id, "error: the tool refused this request"))
-            else:
-                collect_retrieved(result, tool_result)
-                messages.append(
-                    tool_message(
-                        call.id, json.dumps(tool_result.structured or {}, ensure_ascii=False)
-                    )
-                )
+            executed += execute_call(call, by_name, tools_backend, result, messages)
     return result
 
 
