@@ -159,6 +159,23 @@ def test_model_failure_is_a_clean_stop() -> None:
 def test_empty_model_answer_is_not_reported_as_an_answer() -> None:
     result = run_agent("q", FakeTools(), ScriptedChat(say("   ")))
     assert result.stop_reason == "empty_answer"
+    assert result.turns == 1
+
+
+def test_an_empty_reply_after_tool_results_gets_one_changed_retry() -> None:
+    chat = ScriptedChat(call("search_knowledge", {"query": "q"}), say(""), say("最终答案"))
+    result = run_agent("q", FakeTools(), chat)
+    assert result.stop_reason == "answered" and result.answer == "最终答案"
+    assert result.turns == 3
+    nudge = chat.seen[2][-1]
+    assert nudge["role"] == "user" and "最终回答" in nudge["content"]
+
+
+def test_a_second_empty_reply_is_not_retried_again() -> None:
+    chat = ScriptedChat(call("search_knowledge", {"query": "q"}), say(""), say(""))
+    result = run_agent("q", FakeTools(), chat)
+    assert result.stop_reason == "empty_answer"
+    assert result.turns == 3
 
 
 def test_validate_arguments_checks_types_lengths_and_enums() -> None:
