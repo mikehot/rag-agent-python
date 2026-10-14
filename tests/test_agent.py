@@ -235,3 +235,36 @@ def test_the_empty_reply_retry_can_be_switched_off_for_comparison() -> None:
     chat = ScriptedChat(call("search_knowledge", {"query": "q"}), say(""))
     result = run_agent("q", FakeTools(), chat, Limits(retry_empty_reply=False))
     assert result.stop_reason == "empty_answer" and result.turns == 2
+
+
+def test_decompose_policy_only_adds_to_the_default_prompt() -> None:
+    from rag_agent.agent import DECOMPOSE_ADDENDUM, SYSTEM_PROMPT, system_prompt
+
+    assert system_prompt() == SYSTEM_PROMPT == system_prompt("single")
+    assert system_prompt("decompose").startswith(SYSTEM_PROMPT)
+    assert DECOMPOSE_ADDENDUM in system_prompt("decompose")
+    try:
+        system_prompt("nonsense")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unknown policy must be rejected")
+
+
+def test_the_selected_policy_reaches_the_model_as_the_system_message() -> None:
+    chat = ScriptedChat(say("ok"))
+    run_agent("q", FakeTools(), chat, policy="decompose")
+    assert "拆成彼此独立" in chat.seen[0][0]["content"]
+
+
+def test_a_leaked_control_marker_is_removed_from_the_answer() -> None:
+    from rag_agent.agent import clean_answer
+
+    assert clean_answer("<|channel>根据资料，答案是六个月。") == "根据资料，答案是六个月。"
+    assert clean_answer("答案<|im_end|>") == "答案"
+    assert clean_answer("普通文本 a < b 和 c > d") == "普通文本 a < b 和 c > d"
+    result = run_agent("q", FakeTools(), ScriptedChat(say("<|channel>最终答案")))
+    assert result.answer == "最终答案"
+    assert (
+        run_agent("q", FakeTools(), ScriptedChat(say("<|channel>"))).stop_reason == "empty_answer"
+    )

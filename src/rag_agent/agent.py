@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from rag_agent.llm import AssistantTurn, LlmError
+from rag_agent.llm import AssistantTurn, LlmError, ToolCall
 from rag_agent.mcp_client import McpError, Tool, ToolResult
 
 PROMPT_VERSION = "agent-prompt-v2"
@@ -45,6 +45,32 @@ UUID_PATTERN = re.compile(
 # Sent once when the model replies with nothing after seeing tool results. Resending the same
 # messages at temperature 0 reproduces the same empty reply, so the input has to change.
 EMPTY_REPLY_NUDGE = "请根据以上工具返回的资料，直接给出最终回答；如果资料不能回答问题，请明确说明。"
+
+# Opt-in policy for questions that need facts from more than one place. The default policy
+# ("single") is what the evaluations before this one measured and is unchanged.
+DECOMPOSE_ADDENDUM = (
+    "如果一个问题涉及多个对象、多部法律或多个主题，先把它拆成彼此独立、各自完整的子问题"
+    "（每个子问题用一句完整的话，不要缩成关键词；这一条覆盖上面“使用用户原话”的要求），"
+    "对每个子问题各调用一次检索工具，再把各部分资料综合成一个回答，并说明每个要点依据哪份文档。"
+)
+
+POLICIES = ("single", "decompose")
+
+
+def system_prompt(policy: str = "single") -> str:
+    if policy not in POLICIES:
+        raise ValueError(f"unknown policy {policy!r}; expected one of {POLICIES}")
+    return SYSTEM_PROMPT if policy == "single" else SYSTEM_PROMPT + "\n" + DECOMPOSE_ADDENDUM
+
+
+# Some model servers leak a chat-template control marker (seen as "<|channel>") at the start of
+# free-text content. It is never part of an answer.
+CONTROL_MARKER = re.compile(r"<\|[^<>\n|]{1,40}\|?>")
+
+
+def clean_answer(text: str) -> str:
+    return CONTROL_MARKER.sub("", text).strip()
+
 
 NO_ANSWER = "抱歉，我没能在限定步骤内得到可靠的答案。"
 
@@ -141,18 +167,80 @@ def validate_arguments(schema: dict[str, Any], arguments: Any) -> str | None:
     return None
 
 
+def assistant_message(turn: AssistantTurn) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": turn.content or "",
+        "tool_calls": [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_raw},
+            }
+            for call in turn.tool_calls
+        ],
+    }
+
+
+def execute_call(
+    call: ToolCall,
+    by_name: dict[str, Tool],
+    tools_backend: ToolBackend,
+    result: AgentResult,
+    messages: list[dict[str, Any]],
+) -> int:
+    """Validate and run one model-requested tool call, recording it in ``result`` and ``messages``.
+
+    Shared by the plain loop and the LangGraph version so that both apply exactly the same checks.
+    Returns 1 when the call reached the knowledge base (it counts against the tool budget), else 0.
+    """
+    tool = by_name.get(call.name)
+    if tool is None:
+        result.trace.append(ToolTrace(call.name, None, "rejected_unknown_tool"))
+        messages.append(tool_message(call.id, "error: no such tool"))
+        return 0
+    try:
+        arguments = json.loads(call.arguments_raw or "{}")
+    except json.JSONDecodeError:
+        arguments = None
+    problem = validate_arguments(visible_schema(tool), arguments)
+    if problem:
+        result.trace.append(ToolTrace(call.name, None, "rejected_arguments"))
+        messages.append(
+            tool_message(call.id, f"error: {problem}. Fix the arguments and call the tool again.")
+        )
+        return 0
+    try:
+        tool_result = tools_backend.call_tool(call.name, arguments)
+    except McpError:
+        result.trace.append(ToolTrace(call.name, arguments, "transport_error", True))
+        messages.append(tool_message(call.id, "error: the knowledge base is unavailable"))
+        return 1
+    outcome = "tool_error" if tool_result.is_error else "ok"
+    result.trace.append(ToolTrace(call.name, arguments, outcome, tool_result.is_error))
+    if tool_result.is_error:
+        messages.append(tool_message(call.id, "error: the tool refused this request"))
+    else:
+        collect_retrieved(result, tool_result)
+        messages.append(
+            tool_message(call.id, json.dumps(tool_result.structured or {}, ensure_ascii=False))
+        )
+    return 1
+
+
 def run_agent(
     question: str,
     tools_backend: ToolBackend,
     chat: ChatBackend,
     limits: Limits | None = None,
+    policy: str = "single",
 ) -> AgentResult:
     limits = limits or Limits()
     tools = tools_backend.list_tools()
     by_name = {tool.name: tool for tool in tools}
     openai_tools = to_openai_tools(tools)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(policy)},
         {"role": "user", "content": question},
     ]
     result = AgentResult(answer=NO_ANSWER, stop_reason="turn_limit")
@@ -168,7 +256,7 @@ def run_agent(
             return result
 
         if not turn.tool_calls:
-            text = (turn.content or "").strip()
+            text = clean_answer(turn.content or "")
             if text:
                 result.answer, result.stop_reason = text, "answered"
                 return result
@@ -181,60 +269,12 @@ def run_agent(
             messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
             continue
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": turn.content or "",
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {"name": call.name, "arguments": call.arguments_raw},
-                    }
-                    for call in turn.tool_calls
-                ],
-            }
-        )
+        messages.append(assistant_message(turn))
         for call in turn.tool_calls:
             if executed >= limits.max_tool_calls:
                 result.stop_reason = "tool_budget"
                 return result
-            tool = by_name.get(call.name)
-            if tool is None:
-                result.trace.append(ToolTrace(call.name, None, "rejected_unknown_tool"))
-                messages.append(tool_message(call.id, "error: no such tool"))
-                continue
-            try:
-                arguments = json.loads(call.arguments_raw or "{}")
-            except json.JSONDecodeError:
-                arguments = None
-            problem = validate_arguments(visible_schema(tool), arguments)
-            if problem:
-                result.trace.append(ToolTrace(call.name, None, "rejected_arguments"))
-                messages.append(
-                    tool_message(
-                        call.id, f"error: {problem}. Fix the arguments and call the tool again."
-                    )
-                )
-                continue
-            executed += 1
-            try:
-                tool_result = tools_backend.call_tool(call.name, arguments)
-            except McpError:
-                result.trace.append(ToolTrace(call.name, arguments, "transport_error", True))
-                messages.append(tool_message(call.id, "error: the knowledge base is unavailable"))
-                continue
-            outcome = "tool_error" if tool_result.is_error else "ok"
-            result.trace.append(ToolTrace(call.name, arguments, outcome, tool_result.is_error))
-            if tool_result.is_error:
-                messages.append(tool_message(call.id, "error: the tool refused this request"))
-            else:
-                collect_retrieved(result, tool_result)
-                messages.append(
-                    tool_message(
-                        call.id, json.dumps(tool_result.structured or {}, ensure_ascii=False)
-                    )
-                )
+            executed += execute_call(call, by_name, tools_backend, result, messages)
     return result
 
 

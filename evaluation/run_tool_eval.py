@@ -23,19 +23,21 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from rag_agent.agent import Limits, run_agent
+from rag_agent.graph import run_graph_agent
 from rag_agent.kb_auth import login
 from rag_agent.llm import ChatClient
 from rag_agent.mcp_client import McpClient
 from rag_agent.tool_eval import score_case
 
 
-def run_once(cases, kb_url, creds, chat, limits):
+def run_once(cases, kb_url, creds, chat, limits, policy="single", engine="loop"):
     rows = []
     for case in cases:
         c = creds[case["actor"]]
         started = time.monotonic()
         with McpClient(kb_url, login(kb_url, c["username"], c["password"])) as kb:
-            result = run_agent(case["question"], kb, chat, limits)
+            runner = run_graph_agent if engine == "graph" else run_agent
+            result = runner(case["question"], kb, chat, limits, policy)
         failures = score_case(case["expect"], result)
         rows.append(
             {
@@ -46,6 +48,7 @@ def run_once(cases, kb_url, creds, chat, limits):
                 "stop_reason": result.stop_reason,
                 "turns": result.turns,
                 "trace": [[t.name, t.outcome] for t in result.trace],
+                "tool_calls": len(result.trace),
                 "answer": result.answer,
                 "seconds": round(time.monotonic() - started, 2),
             }
@@ -63,6 +66,10 @@ def main() -> int:
     parser.add_argument("--label", required=True)
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--policy", choices=["single", "decompose"], default="single")
+    parser.add_argument("--engine", choices=["loop", "graph"], default="loop")
+    parser.add_argument("--max-turns", type=int, default=4)
+    parser.add_argument("--max-tool-calls", type=int, default=3)
     parser.add_argument(
         "--no-empty-retry",
         action="store_true",
@@ -79,9 +86,12 @@ def main() -> int:
 
     per_run = []
     for run in range(1, args.repeats + 1):
-        rows = run_once(
-            cases, args.kb_url, creds, chat, Limits(retry_empty_reply=not args.no_empty_retry)
+        limits = Limits(
+            max_turns=args.max_turns,
+            max_tool_calls=args.max_tool_calls,
+            retry_empty_reply=not args.no_empty_retry,
         )
+        rows = run_once(cases, args.kb_url, creds, chat, limits, args.policy, args.engine)
         (args.out_dir / f"{args.label}.run{run}.jsonl").write_text(
             "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
         )
@@ -108,7 +118,8 @@ def main() -> int:
     retry = "off" if args.no_empty_retry else "on"
     print(
         f"Dataset `{args.dataset.name}`, {len(cases)} cases, {args.repeats} run(s), "
-        f"empty-reply retry {retry}."
+        f"empty-reply retry {retry}, policy {args.policy}, engine {args.engine}, "
+        f"limits {args.max_turns} turns / {args.max_tool_calls} tool calls."
     )
     mean = statistics.mean(totals)
     spread = f"{min(totals)}–{max(totals)}"

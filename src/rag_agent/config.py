@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +20,9 @@ class Settings(BaseSettings):
     llm_model: str = "google/gemma-4-26b-a4b-qat"
     llm_api_key: str = ""
     llm_timeout_seconds: float = 120.0
+
+    # "loop" is the reference implementation; "graph" is the same agent as a LangGraph StateGraph.
+    engine: Literal["loop", "graph"] = "loop"
 
     max_turns: int = 4
     max_tool_calls: int = 3

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from rag_agent import __version__
 from rag_agent.agent import AgentResult, ChatBackend, Limits, ToolBackend, run_agent
 from rag_agent.config import Settings
+from rag_agent.graph import run_graph_agent
 from rag_agent.llm import ChatClient
 from rag_agent.mcp_client import McpClient, McpError
 
@@ -90,6 +91,7 @@ def create_app(
         timeout=settings.llm_timeout_seconds,
     )
     limits = Limits(max_turns=settings.max_turns, max_tool_calls=settings.max_tool_calls)
+    runner = run_graph_agent if settings.engine == "graph" else run_agent
     app = FastAPI(title="rag-agent-python", version=__version__)
     app.state.settings = settings
 
@@ -107,7 +109,7 @@ def create_app(
         request_id = uuid.uuid4().hex[:12]
         try:
             with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
-                result = run_agent(request.question, kb, chat, limits)
+                result = runner(request.question, kb, chat, limits)
         except McpError as exc:
             # Never log the question or the token; the status and our own request id are enough.
             log.warning("request=%s knowledge base error status=%s", request_id, exc.status)

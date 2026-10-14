@@ -179,3 +179,16 @@ def test_settings_read_the_environment(monkeypatch) -> None:
 
 def test_httpx_is_importable_for_the_default_clients() -> None:
     assert httpx.__version__
+
+
+def test_the_graph_engine_serves_the_same_answer() -> None:
+    kb = FakeKb(TOKEN)
+    client, _ = build(kb, search_then("依据文档：k8s-pods-pod-lifecycle.md。"), engine="graph")
+    body = client.post("/ask", json={"question": "Pod 的重启策略？"}, headers=AUTH).json()
+    assert body["answered"] is True and body["turns"] == 2
+    assert body["tool_calls"] == [{"name": "search_knowledge", "outcome": "ok"}]
+    assert body["cited_documents"] == ["k8s-pods-pod-lifecycle.md"]
+
+
+def test_engine_defaults_to_the_reference_loop() -> None:
+    assert Settings().engine == "loop"
