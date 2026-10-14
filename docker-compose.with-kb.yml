@@ -1,8 +1,14 @@
 # Overlay for running the agent next to the Java knowledge base's own compose file (see the header of
 # docker-compose.yml). It points the agent at the `backend` service on the shared network and waits
 # for it. The model server (LM Studio) still runs on the host.
+#
+# Relative paths in a layered compose command resolve against the directory of the FIRST -f file (the
+# Java repository), so the build context is restated here relative to that directory. This assumes
+# the two repositories are siblings, as in the command in docker-compose.yml.
 services:
   agent:
+    build:
+      context: ../rag-agent-python
     environment:
       RAG_AGENT_KB_BASE_URL: http://backend:8080
     depends_on:

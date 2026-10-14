@@ -13,6 +13,7 @@
 services:
   agent:
     build: .
+    image: rag-agent-python:local
     container_name: rag-agent-python
     ports:
       - "8090:8090"
