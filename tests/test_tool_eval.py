@@ -49,3 +49,9 @@ def test_forbidden_arguments_are_checked_on_executed_calls_only() -> None:
 
 def test_non_answered_stop_reason_fails_the_case() -> None:
     assert score_case({}, result(stop="turn_limit")) == ["stop_reason=turn_limit"]
+
+
+def test_markdown_emphasis_does_not_hide_a_correct_value() -> None:
+    expect = {"answer_all_of_any": [["是 6", "为 6"]]}
+    assert score_case(expect, result("默认值是 **6**")) == []
+    assert score_case(expect, result("默认值是 `6`")) == []

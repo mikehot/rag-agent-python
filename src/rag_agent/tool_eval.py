@@ -18,6 +18,11 @@ NO_ANSWER_PATTERN = re.compile(
 )
 
 
+def plain_text(text: str) -> str:
+    """Drop markdown emphasis and code marks: ``是 **6**`` must match ``是 6``. Content is unchanged."""
+    return text.replace("*", "").replace("`", "")
+
+
 def executed_calls(result: AgentResult) -> list[Any]:
     return [t for t in result.trace if t.arguments is not None]
 
@@ -25,7 +30,7 @@ def executed_calls(result: AgentResult) -> list[Any]:
 def score_case(expect: dict[str, Any], result: AgentResult) -> list[str]:
     """Return the list of violated expectations; an empty list means the case passed."""
     failures: list[str] = []
-    answer = result.answer
+    answer = plain_text(result.answer)
     if result.stop_reason != "answered":
         failures.append(f"stop_reason={result.stop_reason}")
 
