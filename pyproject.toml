@@ -1,0 +1,40 @@
+[project]
+name = "rag-agent-python"
+version = "0.1.0"
+description = "Python agent orchestration layer over a Java RAG knowledge base, reached through MCP."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143,<0.144",
+    "httpx>=0.28,<0.29",
+    "pydantic-settings>=2.15,<3",
+    "uvicorn>=0.54,<0.55",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "ruff>=0.17,<0.18",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# The knowledge base and its questions are Chinese; full-width punctuation is intentional.
+ignore = ["RUF001", "RUF002", "RUF003"]
