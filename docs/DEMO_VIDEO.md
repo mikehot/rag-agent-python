@@ -1,8 +1,10 @@
 # Demo video: storyboard and recording checklist
 
 Target length **3 to 5 minutes**, one terminal window, synthetic and public data only. Everything on
-screen is produced by `scripts/demo.py`, which never prints a token or a password. A full run of the
-script takes about 15 seconds of compute; the rest of the time is narration.
+screen is produced by `scripts/demo.py` (part A, users) and `scripts/demo_admin.py` (part B,
+administrator), neither of which ever prints a token or a password. Part A takes about 15 seconds of
+compute and part B about 7; the rest of the time is narration. Both together run about 7 minutes, so
+see "A cut that fits 5 minutes" below.
 
 What the video has to make a reviewer believe, in order: (1) permissions are enforced by the
 knowledge base, not by the model; (2) the agent layer is bounded and cannot be talked into another
@@ -60,6 +62,58 @@ redo the whole take.
 | 5 | 2:00–3:00 | Legal asks a two-part question; Java alone says "no information"; the agent answers both parts using two searches | 这是智能体层存在的理由：Java 单次检索回答不了的跨文档问题，智能体拆成两次检索再合并。 | This is why the agent layer exists: a question that needs two documents, answered with two searches. |
 | 6 | 3:00–3:30 | A prompt claiming to be an admin with `userId=admin`; the answer is an ordinary one | 有人在问题里冒充管理员。身份只来自 token，工具的参数里根本没有 userId 这一项。 | Identity comes only from the token; the tool has no userId parameter to fill. |
 | 7 | 3:30–4:30 | The evidence and, importantly, what it does not show | 最后是证据，以及它不能证明的部分。我不会把这些数字说成产品指标。 | The evidence, and what it does not prove. |
+
+## Part B: upload and administrator grant/revoke (the second driver)
+
+The first driver shows what users see. This one shows what an administrator does and that the answer
+follows it immediately. It uploads a new **synthetic** document, asks as a new employee before any
+grant, grants READ, asks again, revokes, and asks a third time. It then deletes the document (use
+`--keep` to leave it).
+
+```bash
+uv run python scripts/demo_admin.py \
+  --admin-credentials "$ADMIN" --credentials "$CREDS" --pause     # $ADMIN is printed by `eval_stack.sh up`
+```
+
+A full run is about 7 seconds of compute. Like `demo.py`, it never prints a token or a password;
+keep the admin credentials file off screen.
+
+| # | Time | On screen | Say (Chinese) | Say (English, one line) |
+|---|---|---|---|---|
+| B1 | 0:00–0:30 | A new document is uploaded; status becomes `ready`; it was cut into 1 chunk | 管理员上传一份新文档，系统异步解析、切片、向量化，状态变成 ready。 | The admin uploads a document; it is parsed, chunked and embedded, then marked ready. |
+| B2 | 0:30–0:55 | The new employee sees 0 documents; asking gets "not in the knowledge base", 0 chunks | 文档已经就绪，但这位员工没有授权，所以什么也看不到，问也问不出来。 | It is indexed, but this employee has no grant, so nothing is visible and nothing is retrievable. |
+| B3 | 0:55–1:10 | The grant: `principalType=USER permission=READ` | 管理员给这位员工授予 READ。 | The admin grants READ to this user. |
+| B4 | 1:10–1:35 | The employee now sees the document; the answer cites it (600 / 400 yuan per night) | 同一个问题，现在带出处地回答了。 | The same question is now answered with a citation. |
+| B5 | 1:35–2:10 | Revoke (HTTP 200); the document disappears; the same question is declined again | 撤销授权，回答立刻跟着变回去。权限是检索查询里的过滤条件，不是模型记住的东西。 | Revoke it and the answer follows at once: permission is a filter in the retrieval query, not something the model remembers. |
+| B6 | optional | The demo document is deleted | 清理演示文档。 | Cleanup. |
+
+**Do not claim** that revoking also clears what a *remembered* conversation already contains: this
+driver asks without a session. If conversation memory is used, an earlier answer stays in the
+conversation and a follow-up can be answered from it without searching (see the README and the
+two-turn report). Also do not claim anything about propagation across several backend replicas; this
+is one local instance.
+
+### A cut that fits 5 minutes
+
+The acceptance text for A5 asks for 3 to 5 minutes. Parts A and B together run about 7. A cut that
+covers everything A5 lists (upload, cited answer, refusal, permission denial, admin ACL) in about 5:
+
+| Order | Scene | About |
+|---|---|---|
+| 1 | A1 permissions per user | 0:30 |
+| 2 | B1 upload, B2 before grant, B3 grant, B4 after grant, B5 revoke | 2:00 |
+| 3 | A2 cited answer through the agent (shows the tool call) | 0:35 |
+| 4 | A5 cross-document question | 0:50 |
+| 5 | A7 evidence and its limits | 0:40 |
+
+Drop A3, A4 and A6 (they repeat points B already makes) and B6. Record Part A and Part B as separate
+takes and join them.
+
+### Still not covered
+
+The Flutter client and the A1 **device** spot check (post-revoke ask and citation on a phone) are not in
+either driver; they need a physical device and are described in `docs/DEMO.md` section 8 of the Java
+repository.
 
 ## Things to say out loud, and not to cut
 
