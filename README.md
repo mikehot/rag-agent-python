@@ -72,6 +72,18 @@ curl -s -X DELETE localhost:8090/sessions/<id> -H "Authorization: Bearer $KB_TOK
   wherever the fact was new, but restated follow-up queries retrieve less reliably than a user's own
   wording ([report](evaluation/reports/multi-turn-local-2026-10-14.md)).
 
+## Tracing
+
+OpenTelemetry spans for every request: `agent.ask` (root) with a child `llm.chat` per model call and a
+`tool.call` per tool call. Off by default; `RAG_AGENT_TRACING=console` prints finished spans to standard
+output. There is no network exporter in this version.
+
+Spans carry behaviour only: engine, policy, durations, counts, outcomes, model name, finish reason and
+token counts. **They never carry the question, the answer, tool arguments, retrieved text, a bearer
+token, a username or a session id.** The allow-list of attribute names lives in
+`src/rag_agent/telemetry.py` and setting any other name raises; tests assert that no span in a real
+request contains any of those values.
+
 ## Run with Docker
 
 The image is built from `uv.lock` only (`uv sync --locked`), runs as an unprivileged user with a read-only

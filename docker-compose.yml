@@ -24,6 +24,7 @@ services:
       RAG_AGENT_LLM_API_KEY: ${RAG_AGENT_LLM_API_KEY:-}
       RAG_AGENT_ENGINE: ${RAG_AGENT_ENGINE:-loop}
       RAG_AGENT_POLICY: ${RAG_AGENT_POLICY:-single}
+      RAG_AGENT_TRACING: ${RAG_AGENT_TRACING:-off}
     # Linux does not define host.docker.internal on its own; Docker Desktop already does.
     extra_hosts:
       - "host.docker.internal:host-gateway"

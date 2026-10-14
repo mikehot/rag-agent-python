@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from rag_agent import telemetry
 from rag_agent.llm import AssistantTurn, LlmError, ToolCall
 from rag_agent.mcp_client import McpError, Tool, ToolResult
 
@@ -99,11 +100,25 @@ def model_turn(
     on_event: EventSink | None,
 ) -> AssistantTurn:
     """One model call. Streams content deltas to ``on_event`` when the client supports it."""
-    if on_event is not None and hasattr(chat, "complete_stream"):
-        return chat.complete_stream(
-            messages, tools, lambda text: on_event({"type": "delta", "text": text})
+    streaming = on_event is not None and hasattr(chat, "complete_stream")
+    with telemetry.tracer().start_as_current_span("llm.chat") as span:
+        telemetry.set_attributes(
+            span, llm__model=str(getattr(chat, "model", "unknown")), llm__streaming=streaming
         )
-    return chat.complete(messages, tools)
+        if streaming:
+            turn = chat.complete_stream(
+                messages, tools, lambda text: on_event({"type": "delta", "text": text})
+            )
+        else:
+            turn = chat.complete(messages, tools)
+        telemetry.set_attributes(
+            span,
+            llm__finish_reason=str(turn.finish_reason),
+            llm__tool_calls=len(turn.tool_calls),
+        )
+        if turn.completion_tokens is not None:
+            telemetry.set_attributes(span, llm__completion_tokens=int(turn.completion_tokens))
+        return turn
 
 
 # Some model servers leak a chat-template control marker (seen as "<|channel>") at the start of
@@ -239,10 +254,15 @@ def execute_call(
     Returns 1 when the call reached the knowledge base (it counts against the tool budget), else 0.
     """
     before = len(result.trace)
-    spent = _execute_call(call, by_name, tools_backend, result, messages)
-    if on_event is not None and len(result.trace) > before:
-        last = result.trace[-1]
-        on_event({"type": "tool_call", "name": last.name, "outcome": last.outcome})
+    with telemetry.tracer().start_as_current_span("tool.call") as span:
+        # Only the tool's name (a fixed allow-list from the server), never its arguments.
+        telemetry.set_attributes(span, tool__name=str(call.name)[:64])
+        spent = _execute_call(call, by_name, tools_backend, result, messages)
+        if len(result.trace) > before:
+            last = result.trace[-1]
+            telemetry.set_attributes(span, tool__outcome=last.outcome, tool__is_error=last.is_error)
+            if on_event is not None:
+                on_event({"type": "tool_call", "name": last.name, "outcome": last.outcome})
     return spent
 
 

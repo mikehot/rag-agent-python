@@ -14,7 +14,7 @@ from fastapi import FastAPI, Header, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from rag_agent import __version__
+from rag_agent import __version__, telemetry
 from rag_agent.agent import AgentResult, ChatBackend, Limits, ToolBackend, run_agent
 from rag_agent.config import Settings, unknown_settings
 from rag_agent.graph import run_graph_agent
@@ -70,8 +70,13 @@ def bearer_token(authorization: str | None) -> str | None:
     return value if scheme.lower() == "bearer" and value else None
 
 
+def cited_filenames(result: AgentResult) -> list[str]:
+    """File names of retrieved documents that the answer text names, one entry per file."""
+    named = [r["filename"] for r in result.retrieved if r["filename"] in result.answer]
+    return list(dict.fromkeys(named))
+
+
 def to_response(result: AgentResult, session_id: str | None = None) -> AskResponse:
-    cited = [r["filename"] for r in result.retrieved if r["filename"] in result.answer]
     return AskResponse(
         answer=result.answer,
         answered=result.stop_reason == "answered",
@@ -79,7 +84,7 @@ def to_response(result: AgentResult, session_id: str | None = None) -> AskRespon
         turns=result.turns,
         tool_calls=[ToolCallInfo(name=t.name, outcome=t.outcome) for t in result.trace],
         retrieved=[DocumentRef(**r) for r in result.retrieved],
-        cited_documents=list(dict.fromkeys(cited)),
+        cited_documents=cited_filenames(result),
         session_id=session_id,
     )
 
@@ -95,6 +100,7 @@ def create_app(
     sessions: SessionStore | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    telemetry.configure(settings.tracing)
     for name in unknown_settings(dict(os.environ)):
         log.warning("ignoring unknown setting %s (not supported by this version)", name)
     kb_factory = kb_factory or default_kb_factory
@@ -134,8 +140,27 @@ def create_app(
         return token, session_id, history
 
     def execute(request: AskRequest, token: str, history, on_event=None) -> AgentResult:
-        with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
-            return runner(request.question, kb, chat, limits, settings.policy, history, on_event)
+        with telemetry.tracer().start_as_current_span("agent.ask") as span:
+            telemetry.set_attributes(
+                span,
+                agent__engine=settings.engine,
+                agent__policy=settings.policy,
+                agent__streaming=on_event is not None,
+                agent__has_history=bool(history),
+            )
+            with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
+                result = runner(
+                    request.question, kb, chat, limits, settings.policy, history, on_event
+                )
+            telemetry.set_attributes(
+                span,
+                agent__stop_reason=result.stop_reason,
+                agent__turns=result.turns,
+                agent__tool_calls=len(result.trace),
+                agent__retrieved=len(result.retrieved),
+                agent__cited_documents=len(cited_filenames(result)),
+            )
+            return result
 
     def remember_turn(request: AskRequest, token: str, session_id: str | None, result) -> None:
         if session_id is not None and result.stop_reason == "answered":
