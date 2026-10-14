@@ -1,0 +1,10 @@
+# Overlay for running the agent next to the Java knowledge base's own compose file (see the header of
+# docker-compose.yml). It points the agent at the `backend` service on the shared network and waits
+# for it. The model server (LM Studio) still runs on the host.
+services:
+  agent:
+    environment:
+      RAG_AGENT_KB_BASE_URL: http://backend:8080
+    depends_on:
+      backend:
+        condition: service_started
