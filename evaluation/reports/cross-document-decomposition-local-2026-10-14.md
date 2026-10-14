@@ -58,8 +58,8 @@ both laws in the question itself, so this is still not a test of fully implicit 
 ## Two incidental findings
 
 - **A chat-template control marker leaked into answers.** `<|channel>` appeared at the start of free-text
-  answers in 1–2 cases per run in every capture today (the Java endpoint, which returns structured JSON, was
-  unaffected). It was invisible to the scorer. The agent now strips such markers; this is a hygiene fix, not
+  answers in 10 of the 416 agent answers captured today (7 of 19 capture files; the Java endpoint, which
+  returns structured JSON, was unaffected). It was invisible to the scorer. The agent now strips such markers; this is a hygiene fix, not
   an improvement of answer quality, and the earlier numbers in this repository were measured with it present.
 - **The `decompose` prompt makes the model quote document titles and article numbers** ("依据《数据安全法》
   第二十七条") more readily. Nothing here checks that those citations are accurate; the knowledge base's own
