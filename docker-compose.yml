@@ -1,0 +1,35 @@
+# The agent service on its own. It reaches the knowledge base and the model server on the host.
+#
+#   docker compose up --build
+#
+# To run it together with the Java knowledge base from the sibling repository (database, backend and
+# this service from one command), layer the override file on top of that repository's compose file:
+#
+#   docker compose -p ragdemo \
+#     -f ../rag-knowledge-base/docker-compose.yml -f docker-compose.yml -f docker-compose.with-kb.yml \
+#     up --build
+#
+# Credentials are never configured here: every request carries the caller's own bearer token.
+services:
+  agent:
+    build: .
+    image: rag-agent-python:local
+    container_name: rag-agent-python
+    ports:
+      - "8090:8090"
+    environment:
+      RAG_AGENT_KB_BASE_URL: ${RAG_AGENT_KB_BASE_URL:-http://host.docker.internal:8080}
+      RAG_AGENT_LLM_BASE_URL: ${RAG_AGENT_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      RAG_AGENT_LLM_MODEL: ${RAG_AGENT_LLM_MODEL:-google/gemma-4-26b-a4b-qat}
+      RAG_AGENT_LLM_API_KEY: ${RAG_AGENT_LLM_API_KEY:-}
+      RAG_AGENT_ENGINE: ${RAG_AGENT_ENGINE:-loop}
+      RAG_AGENT_POLICY: ${RAG_AGENT_POLICY:-single}
+    # Linux does not define host.docker.internal on its own; Docker Desktop already does.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

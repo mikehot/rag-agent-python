@@ -45,6 +45,37 @@ curl -s -X POST localhost:8090/ask \
 `401` for a missing or rejected token, `502` when the knowledge base or the model server is unreachable.
 A model that fails never produces an invented answer.
 
+## Run with Docker
+
+The image is built from `uv.lock` only (`uv sync --locked`), runs as an unprivileged user with a read-only
+filesystem and no capabilities, and has a health check.
+
+```bash
+# the agent alone, pointed at a knowledge base and a model server on the host
+docker compose up --build
+```
+
+```bash
+# database + Java backend + agent from one command (the two repositories must be siblings)
+export AI_EMBEDDING_MODEL_ID=text-embedding-bge-m3 AI_TEMPERATURE=0
+docker compose -p ragdemo \
+  -f ../rag-knowledge-base/docker-compose.yml -f docker-compose.yml -f docker-compose.with-kb.yml \
+  up -d --build
+```
+
+The model server (LM Studio) still runs on the host, with **Enable Thinking off**. Verified on 2026-10-14:
+the whole stack came up in 11 seconds with a warm build cache and answered real questions through the
+agent container. Things to know:
+
+- **The first build of the Java image took 16 minutes** on the machine used here: Maven Central answered
+  at about 0.7 MB/s from this network and the build prints nothing under `-q`. Later builds hit the cache.
+- Relative paths in a layered `-f` command resolve against the *first* file's directory, which is why
+  `docker-compose.with-kb.yml` restates the build context.
+- The Java compose file pins `container_name`s, so it collides with containers left from an earlier run of
+  the same file. Remove those, or give the stack different names with an extra override file.
+- A `RAG_AGENT_*` setting this version does not know is ignored on purpose, but a warning is logged at
+  startup (it caught a real case where an image predated a setting).
+
 ## What was learned so far
 
 A small local model needed four changes before it used the knowledge base correctly through MCP, and one of
