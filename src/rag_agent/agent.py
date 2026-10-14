@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -56,11 +57,53 @@ DECOMPOSE_ADDENDUM = (
 
 POLICIES = ("single", "decompose")
 
+# Added only when the conversation already has earlier turns. It overrides "use the user's own words
+# as the query" for the one case where those words cannot work: a follow-up that depends on context.
+FOLLOWUP_ADDENDUM = (
+    "对话中如果当前问题依赖前文（例如“那它呢”“默认值是多少”），检索前先把它改写成一句完整的、"
+    "不依赖上下文的问题，再用这句话检索；不依赖前文的问题仍然使用用户原话。"
+    "之前的回答只是对话记录，不是资料：事实仍然必须来自本轮工具返回的内容。"
+)
 
-def system_prompt(policy: str = "single") -> str:
+History = list[tuple[str, str]]
+EventSink = Callable[[dict[str, Any]], None]
+
+
+def system_prompt(policy: str = "single", with_history: bool = False) -> str:
     if policy not in POLICIES:
         raise ValueError(f"unknown policy {policy!r}; expected one of {POLICIES}")
-    return SYSTEM_PROMPT if policy == "single" else SYSTEM_PROMPT + "\n" + DECOMPOSE_ADDENDUM
+    text = SYSTEM_PROMPT if policy == "single" else SYSTEM_PROMPT + "\n" + DECOMPOSE_ADDENDUM
+    return text + "\n" + FOLLOWUP_ADDENDUM if with_history else text
+
+
+def initial_messages(question: str, policy: str, history: History | None) -> list[dict[str, Any]]:
+    """System prompt, earlier question/answer pairs as plain text, then the new question.
+
+    Only questions and final answers are carried over, never tool output: retrieval is repeated for
+    every turn so that it always runs with the caller's *current* permissions.
+    """
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt(policy, bool(history))}
+    ]
+    for earlier_question, earlier_answer in history or []:
+        messages.append({"role": "user", "content": earlier_question})
+        messages.append({"role": "assistant", "content": earlier_answer})
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def model_turn(
+    chat: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_event: EventSink | None,
+) -> AssistantTurn:
+    """One model call. Streams content deltas to ``on_event`` when the client supports it."""
+    if on_event is not None and hasattr(chat, "complete_stream"):
+        return chat.complete_stream(
+            messages, tools, lambda text: on_event({"type": "delta", "text": text})
+        )
+    return chat.complete(messages, tools)
 
 
 # Some model servers leak a chat-template control marker (seen as "<|channel>") at the start of
@@ -188,12 +231,28 @@ def execute_call(
     tools_backend: ToolBackend,
     result: AgentResult,
     messages: list[dict[str, Any]],
+    on_event: EventSink | None = None,
 ) -> int:
     """Validate and run one model-requested tool call, recording it in ``result`` and ``messages``.
 
     Shared by the plain loop and the LangGraph version so that both apply exactly the same checks.
     Returns 1 when the call reached the knowledge base (it counts against the tool budget), else 0.
     """
+    before = len(result.trace)
+    spent = _execute_call(call, by_name, tools_backend, result, messages)
+    if on_event is not None and len(result.trace) > before:
+        last = result.trace[-1]
+        on_event({"type": "tool_call", "name": last.name, "outcome": last.outcome})
+    return spent
+
+
+def _execute_call(
+    call: ToolCall,
+    by_name: dict[str, Tool],
+    tools_backend: ToolBackend,
+    result: AgentResult,
+    messages: list[dict[str, Any]],
+) -> int:
     tool = by_name.get(call.name)
     if tool is None:
         result.trace.append(ToolTrace(call.name, None, "rejected_unknown_tool"))
@@ -234,15 +293,14 @@ def run_agent(
     chat: ChatBackend,
     limits: Limits | None = None,
     policy: str = "single",
+    history: History | None = None,
+    on_event: EventSink | None = None,
 ) -> AgentResult:
     limits = limits or Limits()
     tools = tools_backend.list_tools()
     by_name = {tool.name: tool for tool in tools}
     openai_tools = to_openai_tools(tools)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt(policy)},
-        {"role": "user", "content": question},
-    ]
+    messages = initial_messages(question, policy, history)
     result = AgentResult(answer=NO_ANSWER, stop_reason="turn_limit")
     executed = 0
     nudged = False
@@ -250,7 +308,7 @@ def run_agent(
     for _ in range(limits.max_turns):
         result.turns += 1
         try:
-            turn = chat.complete(messages, openai_tools)
+            turn = model_turn(chat, messages, openai_tools, on_event)
         except LlmError:
             result.stop_reason = "model_error"
             return result
@@ -274,7 +332,7 @@ def run_agent(
             if executed >= limits.max_tool_calls:
                 result.stop_reason = "tool_budget"
                 return result
-            executed += execute_call(call, by_name, tools_backend, result, messages)
+            executed += execute_call(call, by_name, tools_backend, result, messages, on_event)
     return result
 
 

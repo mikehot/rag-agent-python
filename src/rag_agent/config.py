@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # report).
     policy: Literal["single", "decompose"] = "single"
 
+    session_ttl_seconds: float = 1800.0
+    max_sessions: int = 1000
+
     max_turns: int = 4
     max_tool_calls: int = 3
 
