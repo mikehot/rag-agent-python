@@ -54,7 +54,7 @@ The full account, including what the numbers do not show, is in the
 ## Plan
 
 1. ~~MCP client with contract tests~~, ~~bounded agent loop~~, ~~tool-call evaluation~~, ~~held-out set~~.
-2. Repeats that include a model-server restart; a retry for empty model replies, judged on a *new* held-out set.
+2. Repeats that include a model-server restart; look at the wrong "not in the knowledge base" answers (H2-05).
 3. Wire the loop to `POST /ask`, then: LangGraph wrapper, streaming, multi-turn memory.
 
 Everything runs locally against a local model. No hosted service is assumed.
