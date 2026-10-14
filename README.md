@@ -16,7 +16,7 @@ Early scaffold. What exists today:
 | Piece | State |
 |---|---|
 | FastAPI app, `GET /health` | done |
-| `POST /ask` | done: runs the bounded agent loop with the caller's own bearer token |
+| `POST /ask`, `POST /ask/stream` | done: bounded agent loop with the caller's own bearer token; SSE streaming; opt-in conversation memory |
 | MCP client for the Java service | done: offline contract tests + 12 live tests (skipped without a knowledge base) |
 | Bounded tool-calling loop | done: turn and tool-call limits, local argument validation, hidden scope arguments |
 | LangGraph version of the same agent | done: `RAG_AGENT_ENGINE=graph`; identical to the loop on 16 scripted scenarios; same pass counts on 5 live sets, and identical output to the loop's second run on the 2 sets checked; see [the report](evaluation/reports/langgraph-local-2026-10-14.md) |
@@ -44,6 +44,45 @@ curl -s -X POST localhost:8090/ask \
 
 `401` for a missing or rejected token, `502` when the knowledge base or the model server is unreachable.
 A model that fails never produces an invented answer.
+
+## Streaming and conversations
+
+```bash
+# server-sent events: session, tool_call, delta..., answer, done
+curl -N -X POST localhost:8090/ask/stream \
+  -H "Authorization: Bearer $KB_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question": "Pod 的重启策略有哪些？", "remember": true}'
+
+# a follow-up that only makes sense with the earlier turn
+curl -s -X POST localhost:8090/ask \
+  -H "Authorization: Bearer $KB_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question": "那默认值是哪个？", "session_id": "<id from the first call>"}'
+
+curl -s -X DELETE localhost:8090/sessions/<id> -H "Authorization: Bearer $KB_TOKEN"
+```
+
+- `delta` events are a preview. The `answer` event is authoritative: it has control markers removed and is
+  what `cited_documents` is computed from.
+- **Nothing is remembered unless asked.** A session holds earlier questions and final answers only (never
+  tool output), is bound to the token that created it, and expires (default 30 minutes, 6 turns, in memory).
+  Retrieval runs again every turn with the caller's current permissions. Nothing forces that, though: a
+  follow-up can be answered from the conversation without searching, so a revoked permission does not
+  reliably take effect inside an already-remembered session.
+- Measured on 10 two-turn conversations: memory turned 2/8 follow-ups into 5/8 and retrieval was repeated
+  wherever the fact was new, but restated follow-up queries retrieve less reliably than a user's own
+  wording ([report](evaluation/reports/multi-turn-local-2026-10-14.md)).
+
+## Tracing
+
+OpenTelemetry spans for every request: `agent.ask` (root) with a child `llm.chat` per model call and a
+`tool.call` per tool call. Off by default; `RAG_AGENT_TRACING=console` prints finished spans to standard
+output. There is no network exporter in this version.
+
+Spans carry behaviour only: engine, policy, durations, counts, outcomes, model name, finish reason and
+token counts. **They never carry the question, the answer, tool arguments, retrieved text, a bearer
+token, a username or a session id.** The allow-list of attribute names lives in
+`src/rag_agent/telemetry.py` and setting any other name raises; tests assert that no span in a real
+request contains any of those values.
 
 ## Run with Docker
 

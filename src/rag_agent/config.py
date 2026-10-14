@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # report).
     policy: Literal["single", "decompose"] = "single"
 
+    # "off" (default) or "console": spans to standard output, never any user text or secret.
+    tracing: Literal["off", "console"] = "off"
+
+    session_ttl_seconds: float = 1800.0
+    max_sessions: int = 1000
+
     max_turns: int = 4
     max_tool_calls: int = 3
 

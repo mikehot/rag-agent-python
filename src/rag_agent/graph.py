@@ -27,13 +27,16 @@ from rag_agent.agent import (
     NO_ANSWER,
     AgentResult,
     ChatBackend,
+    EventSink,
+    History,
     Limits,
     ToolBackend,
     ToolTrace,
     assistant_message,
     clean_answer,
     execute_call,
-    system_prompt,
+    initial_messages,
+    model_turn,
     to_openai_tools,
 )
 from rag_agent.llm import LlmError, ToolCall
@@ -52,7 +55,12 @@ class AgentState(TypedDict):
     retrieved: list[dict[str, str]]
 
 
-def build_graph(tools_backend: ToolBackend, chat: ChatBackend, limits: Limits):
+def build_graph(
+    tools_backend: ToolBackend,
+    chat: ChatBackend,
+    limits: Limits,
+    on_event: EventSink | None = None,
+):
     """Compile the graph for one knowledge-base connection. The tool list is read once, here."""
     tools = tools_backend.list_tools()
     by_name = {tool.name: tool for tool in tools}
@@ -63,7 +71,7 @@ def build_graph(tools_backend: ToolBackend, chat: ChatBackend, limits: Limits):
             return {"done": True, "stop_reason": "turn_limit"}
         turns = state["turns"] + 1
         try:
-            turn = chat.complete(state["messages"], openai_tools)
+            turn = model_turn(chat, state["messages"], openai_tools, on_event)
         except LlmError:
             return {"turns": turns, "done": True, "stop_reason": "model_error"}
         if turn.tool_calls:
@@ -105,7 +113,7 @@ def build_graph(tools_backend: ToolBackend, chat: ChatBackend, limits: Limits):
                     "trace": scratch.trace,
                     "retrieved": scratch.retrieved,
                 }
-            executed += execute_call(call, by_name, tools_backend, scratch, messages)
+            executed += execute_call(call, by_name, tools_backend, scratch, messages, on_event)
         return {
             "pending": [],
             "messages": messages,
@@ -139,15 +147,14 @@ def run_graph_agent(
     chat: ChatBackend,
     limits: Limits | None = None,
     policy: str = "single",
+    history: History | None = None,
+    on_event: EventSink | None = None,
 ) -> AgentResult:
     """Drop-in replacement for :func:`rag_agent.agent.run_agent`."""
     limits = limits or Limits()
-    compiled = build_graph(tools_backend, chat, limits)
+    compiled = build_graph(tools_backend, chat, limits, on_event)
     initial: AgentState = {
-        "messages": [
-            {"role": "system", "content": system_prompt(policy)},
-            {"role": "user", "content": question},
-        ],
+        "messages": initial_messages(question, policy, history),
         "pending": [],
         "turns": 0,
         "executed": 0,
