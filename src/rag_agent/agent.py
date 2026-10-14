@@ -46,6 +46,23 @@ UUID_PATTERN = re.compile(
 # messages at temperature 0 reproduces the same empty reply, so the input has to change.
 EMPTY_REPLY_NUDGE = "请根据以上工具返回的资料，直接给出最终回答；如果资料不能回答问题，请明确说明。"
 
+# Opt-in policy for questions that need facts from more than one place. The default policy
+# ("single") is what the evaluations before this one measured and is unchanged.
+DECOMPOSE_ADDENDUM = (
+    "如果一个问题涉及多个对象、多部法律或多个主题，先把它拆成彼此独立、各自完整的子问题"
+    "（每个子问题用一句完整的话，不要缩成关键词；这一条覆盖上面“使用用户原话”的要求），"
+    "对每个子问题各调用一次检索工具，再把各部分资料综合成一个回答，并说明每个要点依据哪份文档。"
+)
+
+POLICIES = ("single", "decompose")
+
+
+def system_prompt(policy: str = "single") -> str:
+    if policy not in POLICIES:
+        raise ValueError(f"unknown policy {policy!r}; expected one of {POLICIES}")
+    return SYSTEM_PROMPT if policy == "single" else SYSTEM_PROMPT + "\n" + DECOMPOSE_ADDENDUM
+
+
 NO_ANSWER = "抱歉，我没能在限定步骤内得到可靠的答案。"
 
 
@@ -146,13 +163,14 @@ def run_agent(
     tools_backend: ToolBackend,
     chat: ChatBackend,
     limits: Limits | None = None,
+    policy: str = "single",
 ) -> AgentResult:
     limits = limits or Limits()
     tools = tools_backend.list_tools()
     by_name = {tool.name: tool for tool in tools}
     openai_tools = to_openai_tools(tools)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(policy)},
         {"role": "user", "content": question},
     ]
     result = AgentResult(answer=NO_ANSWER, stop_reason="turn_limit")
