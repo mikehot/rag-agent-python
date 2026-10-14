@@ -19,7 +19,7 @@ NO_ANSWER_PATTERN = re.compile(
 
 
 def plain_text(text: str) -> str:
-    """Drop markdown emphasis and code marks: ``是 **6**`` must match ``是 6``. Content is unchanged."""
+    """Drop markdown emphasis and code marks so "是 **6**" matches "是 6"; content is unchanged."""
     return text.replace("*", "").replace("`", "")
 
 
