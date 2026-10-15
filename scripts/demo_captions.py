@@ -74,6 +74,16 @@ CAPTIONS: dict[str, tuple[str, str]] = {
 }
 
 HOLD_AFTER_RESULT = 7.0
+# Scenes whose result is long (a long answer, a table) stay on screen longer than the default.
+HOLDS: dict[str, float] = {
+    "A2": 10.0,
+    "A5": 16.0,
+    "A6": 11.0,
+    "A7": 20.0,
+    "B2": 9.0,
+    "B4": 10.0,
+    "B5": 11.0,
+}
 MIN_READ = 4.0
 SECONDS_PER_CHAR = 0.14
 YELLOW, BOLD, DIM, RESET = "\033[93m", "\033[1m", "\033[2m", "\033[0m"
@@ -83,6 +93,7 @@ class Pacer:
     def __init__(self, captions: bool, auto: bool, speed: float) -> None:
         self.captions, self.auto, self.speed = captions, auto, speed
         self._started = False
+        self._key: str | None = None
 
     def _sleep(self, seconds: float) -> None:
         time.sleep(max(0.0, seconds * self.speed))
@@ -91,12 +102,13 @@ class Pacer:
         """Before a scene header: let the previous result be read, then clear the screen."""
         if self.auto:
             if self._started:
-                self._sleep(HOLD_AFTER_RESULT)
+                self._sleep(HOLDS.get(self._key or "", HOLD_AFTER_RESULT))
             sys.stdout.write("\033[2J\033[H")
             sys.stdout.flush()
         self._started = True
 
     def caption(self, key: str) -> None:
+        self._key = key
         if not self.captions:
             return
         zh, en = CAPTIONS[key]
@@ -109,4 +121,4 @@ class Pacer:
 
     def finish(self) -> None:
         if self.auto:
-            self._sleep(HOLD_AFTER_RESULT)
+            self._sleep(HOLDS.get(self._key or "", HOLD_AFTER_RESULT))

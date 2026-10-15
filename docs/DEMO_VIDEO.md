@@ -115,6 +115,31 @@ The Flutter client and the A1 **device** spot check (post-revoke ask and citatio
 either driver; they need a physical device and are described in `docs/DEMO.md` section 8 of the Java
 repository.
 
+## Recording with no voice
+
+If you cannot or do not want to speak, let the screen do the talking. Both drivers take two switches:
+
+| Switch | What it does |
+|---|---|
+| `--captions` | prints a Chinese and an English explanation (the same sentences as the tables above) before each scene |
+| `--auto` | advances by itself after a reading delay and clears the screen at every scene; nobody presses Enter |
+
+```bash
+uv run python scripts/demo.py --credentials "$CREDS" --captions --auto
+```
+
+```bash
+uv run python scripts/demo_admin.py --admin-credentials "$ADMIN" --credentials "$CREDS" --captions --auto
+```
+
+Start the recording, type one command, wait, stop. Part A takes about 2.5 minutes at real speed and part
+B about 1.5, so together they fit the 5 minutes A5 asks for. Add `--speed 0.2` to rehearse quickly
+(every delay is shortened to a fifth). Long results (the cross-document answer, the evidence table) stay
+on screen longer than short ones; the per-scene delays are in `scripts/demo_captions.py`.
+
+A silent video is fine for a README or a portfolio page: people often watch with the sound off. The
+captions are the same words as the narration, so the recording says what the speaker would have said.
+
 ## Things to say out loud, and not to cut
 
 - **Scenes 2 and 3 can show "轮数 3".** That is the empty-reply retry firing: the model produced an
