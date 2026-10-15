@@ -140,6 +140,16 @@ on screen longer than short ones; the per-scene delays are in `scripts/demo_capt
 A silent video is fine for a README or a portfolio page: people often watch with the sound off. The
 captions are the same words as the narration, so the recording says what the speaker would have said.
 
+## The recording that exists
+
+A silent 3 min 47 s recording made with these drivers (`--captions --auto`, terminal only, no
+narration) is committed to the Java repository as
+[`docs/demo/rag-agent-demo.mp4`](https://github.com/mikehot/rag-knowledge-base/blob/main/docs/demo/rag-agent-demo.mp4),
+with notes on what it shows and what it does not
+([`docs/demo/README.md`](https://github.com/mikehot/rag-knowledge-base/blob/main/docs/demo/README.md)).
+It was assembled from three takes (part A without the last scene, a re-recorded last scene with its
+final frame held for 12 seconds, and part B).
+
 ## Things to say out loud, and not to cut
 
 - **Scenes 2 and 3 can show "轮数 3".** That is the empty-reply retry firing: the model produced an
