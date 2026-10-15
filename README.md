@@ -65,9 +65,15 @@ curl -s -X DELETE localhost:8090/sessions/<id> -H "Authorization: Bearer $KB_TOK
   what `cited_documents` is computed from.
 - **Nothing is remembered unless asked.** A session holds earlier questions and final answers only (never
   tool output), is bound to the token that created it, and expires (default 30 minutes, 6 turns, in memory).
-  Retrieval runs again every turn with the caller's current permissions. Nothing forces that, though: a
-  follow-up can be answered from the conversation without searching, so a revoked permission does not
-  reliably take effect inside an already-remembered session.
+  Retrieval runs again every turn with the caller's current permissions, and now it is **enforced**: in a
+  conversation with earlier turns a final reply is accepted only after a successful retrieval in the
+  current turn (one changed retry, then a fixed refusal with `stop_reason="no_retrieval"`; no text is
+  streamed before the first retrieval). With enforcement off, a model asked to repeat a document that
+  had just been revoked did so verbatim in 3 of 3 valid runs, twice; with it on, 0 of 3, twice, and every
+  turn retrieved ([report](evaluation/reports/enforce-retrieval-local-2026-10-15.md)). Three valid cases,
+  one model, one revocation path; the stored earlier answer is not erased on revocation, and the
+  fixed-refusal path was never exercised by a live model.
+  `RAG_AGENT_ENFORCE_RETRIEVAL=false` turns it off, for comparison only.
 - Measured on 10 two-turn conversations: memory turned 2/8 follow-ups into 5/8 and retrieval was repeated
   wherever the fact was new, but restated follow-up queries retrieve less reliably than a user's own
   wording ([report](evaluation/reports/multi-turn-local-2026-10-14.md)).
