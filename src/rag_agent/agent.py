@@ -58,6 +58,14 @@ DECOMPOSE_ADDENDUM = (
 
 POLICIES = ("single", "decompose")
 
+# With a remembered conversation, the model can answer from the earlier answers in its own context
+# and never call a tool. Retrieval is where the caller's *current* permissions are applied, so a
+# reply produced without it is not accepted: one changed retry, then a fixed refusal.
+RETRIEVAL_NUDGE = (
+    "这一轮必须先调用检索工具，用本轮检索到的资料回答；前文的回答不是资料，不能直接用来回答。"
+)
+NO_RETRIEVAL_ANSWER = "抱歉，本轮没有检索到可引用的资料，无法回答这个问题。"
+
 # Added only when the conversation already has earlier turns. It overrides "use the user's own words
 # as the query" for the one case where those words cannot work: a follow-up that depends on context.
 FOLLOWUP_ADDENDUM = (
@@ -152,6 +160,9 @@ class Limits:
     # One changed retry after an empty model reply that follows tool results. A switch so that the
     # retry can be evaluated against its absence on the same questions.
     retry_empty_reply: bool = True
+    # In a conversation with earlier turns, a final reply is accepted only after a successful
+    # retrieval in the current turn. A switch so that it can be evaluated against its absence.
+    enforce_retrieval: bool = True
 
 
 @dataclass(frozen=True)
@@ -166,7 +177,8 @@ class ToolTrace:
 @dataclass
 class AgentResult:
     answer: str
-    stop_reason: str  # "answered" | "turn_limit" | "tool_budget" | "model_error" | "empty_answer"
+    # answered | turn_limit | tool_budget | model_error | empty_answer | no_retrieval
+    stop_reason: str
     turns: int = 0
     trace: list[ToolTrace] = field(default_factory=list)
     # Candidates the knowledge base returned, NOT citations: the model may still decide that none of
@@ -324,16 +336,26 @@ def run_agent(
     result = AgentResult(answer=NO_ANSWER, stop_reason="turn_limit")
     executed = 0
     nudged = False
+    forced = False
+    has_history = bool(history)
 
     for _ in range(limits.max_turns):
         result.turns += 1
+        closed = retrieval_gate_closed(limits, has_history, result.trace)
         try:
-            turn = model_turn(chat, messages, openai_tools, on_event)
+            turn = model_turn(chat, messages, openai_tools, gated_sink(on_event, closed))
         except LlmError:
             result.stop_reason = "model_error"
             return result
 
         if not turn.tool_calls:
+            if closed:
+                if forced:
+                    result.answer, result.stop_reason = NO_RETRIEVAL_ANSWER, "no_retrieval"
+                    return result
+                forced = True
+                messages.append({"role": "user", "content": RETRIEVAL_NUDGE})
+                continue
             text = clean_answer(turn.content or "")
             if text:
                 result.answer, result.stop_reason = text, "answered"
@@ -354,6 +376,27 @@ def run_agent(
                 return result
             executed += execute_call(call, by_name, tools_backend, result, messages, on_event)
     return result
+
+
+def retrieved_this_turn(trace: list[ToolTrace]) -> bool:
+    return any(entry.outcome == "ok" for entry in trace)
+
+
+def retrieval_gate_closed(limits: Limits, has_history: bool, trace: list[ToolTrace]) -> bool:
+    """True while a final reply must not be accepted (and must not be shown) yet."""
+    return limits.enforce_retrieval and has_history and not retrieved_this_turn(trace)
+
+
+def gated_sink(on_event: EventSink | None, closed: bool) -> EventSink | None:
+    """Drop text deltas while the gate is closed, so a rejected reply is never streamed."""
+    if on_event is None or not closed:
+        return on_event
+
+    def sink(event: dict[str, Any]) -> None:
+        if event.get("type") != "delta":
+            on_event(event)
+
+    return sink
 
 
 def tool_message(call_id: str, content: str) -> dict[str, Any]:

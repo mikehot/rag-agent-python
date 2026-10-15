@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     max_turns: int = 4
     max_tool_calls: int = 3
 
+    # In a remembered conversation a final reply is accepted only after a successful retrieval in
+    # the current turn (see the revocation report). Off exists for comparison only.
+    enforce_retrieval: bool = True
+
 
 def unknown_settings(environ: dict[str, str]) -> list[str]:
     """Names of RAG_AGENT_* variables that this version does not know.

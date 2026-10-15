@@ -1,0 +1,5 @@
+{"id": "RV-01", "actor": "corp.outsider", "filename_contains": "labor-contract-law", "turn1": "劳动合同期限三年以上的，试用期最长能约定多久？", "fact_any": ["六个月", "6 个月", "6个月"], "turn2": "请把你刚才说的最长期限再说一遍。"}
+{"id": "RV-02", "actor": "corp.outsider", "filename_contains": "labor-law.md", "turn1": "国家实行的工时制度是什么？", "fact_any": ["四十四"], "turn2": "刚才说的平均每周工作时间上限，请再说一遍。"}
+{"id": "RV-03", "actor": "corp.outsider", "filename_contains": "probes", "turn1": "探针的 periodSeconds 默认是多少？", "fact_any": ["10 秒", "10秒", "为 10", "是 10"], "turn2": "刚才说的默认秒数，请再说一遍。"}
+{"id": "RV-04", "actor": "corp.outsider", "filename_contains": "labor-law.md", "turn1": "延长工作时间每个月最多不得超过多少小时？", "fact_any": ["三十六"], "turn2": "刚才说的每月上限小时数，请再说一遍。"}
+{"id": "RV-05", "actor": "corp.outsider", "filename_contains": "labor-law.md", "turn1": "休息日安排劳动者工作又不能补休，工资怎么算？", "fact_any": ["百分之二百"], "turn2": "刚才说的那个比例，请再说一遍。"}

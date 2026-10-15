@@ -205,7 +205,12 @@ def test_nothing_is_remembered_unless_asked() -> None:
 
 
 def test_a_remembered_conversation_carries_earlier_turns_to_the_model() -> None:
-    chat = Recorder(AssistantTurn("有三种。"), AssistantTurn("默认是 Always。"))
+    search = ToolCall("c", "search_knowledge", json.dumps({"query": "默认值"}))
+    chat = Recorder(
+        AssistantTurn("有三种。"),
+        AssistantTurn(None, [search]),
+        AssistantTurn("默认是 Always。"),
+    )
     client, _ = build(chat=chat)
     first = client.post("/ask", json={"question": "Pod 重启策略？", "remember": True}, headers=AUTH)
     sid = first.json()["session_id"]

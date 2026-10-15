@@ -1,7 +1,14 @@
 import json
 from typing import Any
 
-from rag_agent.agent import NO_ANSWER, Limits, run_agent, validate_arguments
+from rag_agent.agent import (
+    NO_ANSWER,
+    NO_RETRIEVAL_ANSWER,
+    RETRIEVAL_NUDGE,
+    Limits,
+    run_agent,
+    validate_arguments,
+)
 from rag_agent.llm import AssistantTurn, LlmError, ToolCall
 from rag_agent.mcp_client import McpError, Tool, ToolResult
 
@@ -268,3 +275,64 @@ def test_a_leaked_control_marker_is_removed_from_the_answer() -> None:
     assert (
         run_agent("q", FakeTools(), ScriptedChat(say("<|channel>"))).stop_reason == "empty_answer"
     )
+
+
+HISTORY = [("Pod 的重启策略有哪几种？", "有 Always、OnFailure、Never 三种。")]
+
+
+def test_a_remembered_turn_must_retrieve_before_it_may_answer() -> None:
+    chat = ScriptedChat(
+        say("就是上面说的三种"), call("search_knowledge", {"query": "q"}), say("最终")
+    )
+    tools = FakeTools()
+    result = run_agent("那默认值呢？", tools, chat, history=HISTORY)
+    assert result.stop_reason == "answered" and result.answer == "最终"
+    assert [name for name, _ in tools.calls] == ["search_knowledge"]
+    # the rejected reply is not part of what the model sees next; the instruction is
+    second = chat.seen[1]
+    assert second[-1] == {"role": "user", "content": RETRIEVAL_NUDGE}
+    assert all("就是上面说的三种" not in str(m.get("content")) for m in second)
+
+
+def test_a_turn_that_never_retrieves_is_refused_not_answered_from_history() -> None:
+    chat = ScriptedChat(say("就是上面说的三种"), say("就是上面说的三种"))
+    tools = FakeTools()
+    result = run_agent("那默认值呢？", tools, chat, history=HISTORY)
+    assert result.stop_reason == "no_retrieval"
+    assert result.answer == NO_RETRIEVAL_ANSWER
+    assert result.turns == 2 and tools.calls == []
+
+
+def test_without_history_a_reply_without_tools_is_still_accepted() -> None:
+    result = run_agent("你好", FakeTools(), ScriptedChat(say("你好")))
+    assert result.stop_reason == "answered"
+
+
+def test_the_enforcement_can_be_switched_off_for_comparison() -> None:
+    limits = Limits(enforce_retrieval=False)
+    result = run_agent(
+        "那默认值呢？", FakeTools(), ScriptedChat(say("三种")), limits, history=HISTORY
+    )
+    assert result.stop_reason == "answered" and result.answer == "三种"
+
+
+def test_text_is_not_streamed_before_retrieval_in_a_remembered_conversation() -> None:
+    class Streaming:
+        def __init__(self, *turns: AssistantTurn) -> None:
+            self.turns = list(turns)
+
+        def complete(self, messages, tools):
+            raise AssertionError("streaming client expected")
+
+        def complete_stream(self, messages, tools, on_delta):
+            turn = self.turns.pop(0)
+            if turn.content:
+                on_delta(turn.content)
+            return turn
+
+    events: list[dict[str, Any]] = []
+    chat = Streaming(say("来自前文的答案"), call("search_knowledge", {"query": "q"}), say("最终"))
+    result = run_agent("q", FakeTools(), chat, history=HISTORY, on_event=events.append)
+    assert result.answer == "最终"
+    deltas = [e["text"] for e in events if e["type"] == "delta"]
+    assert deltas == ["最终"]
