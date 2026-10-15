@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import httpx
+from demo_captions import Pacer, check_thinking_off
 
 from rag_agent.kb_auth import login
 from rag_agent.mcp_client import McpClient
@@ -44,8 +45,11 @@ ACTORS = {
 
 
 class Demo:
-    def __init__(self, kb_url: str, agent_url: str, credentials: dict, pause: bool) -> None:
+    def __init__(
+        self, kb_url: str, agent_url: str, credentials: dict, pause: bool, pacer: Pacer
+    ) -> None:
         self.kb_url, self.agent_url, self.creds, self.pause = kb_url, agent_url, credentials, pause
+        self.pacer = pacer
         self._tokens: dict[str, str] = {}
 
     def token(self, actor: str) -> str:
@@ -56,9 +60,11 @@ class Demo:
 
     # -- presentation ---------------------------------------------------------------------------
     def scene(self, number: int, title: str) -> None:
-        if self.pause:
+        self.pacer.begin()
+        if self.pause and not self.pacer.auto:
             input(f"\n{DIM}[Enter] 进入下一幕{RESET}")
         print(f"\n{BOLD}{CYAN}━━ 场景 {number}：{title} ━━{RESET}")
+        self.pacer.caption(f"A{number}")
 
     def who(self, actor: str) -> None:
         print(f"{BOLD}用户{RESET}  {actor}  {DIM}（{ACTORS[actor]}）{RESET}")
@@ -175,7 +181,8 @@ class Demo:
                   · 跨文档 12 题：Java 单次检索 6/12，智能体 9/12，加拆题 12/12（5 次运行全部通过）
                   · 片段长度 360→800：答案类有明显提升，但取决于题目
                 {BOLD}不能说明的{RESET}
-                  · Java 项目同一配置相隔一天从 43/45 变成 38/45，检索一致，原因未查明
+                  · Java 项目同一配置：10-13 是 43/45，10-14 是 38/45，重启后 39/45
+                    检索一致；落差主要是回答措辞撞上字面子串评分，措辞为何变化未查明
                   · 题目由同一个人编写；没有生产部署，没有真实用户
                 """)
             )
@@ -188,10 +195,27 @@ def main() -> int:
     parser.add_argument("--agent-url", default="http://localhost:8090")
     parser.add_argument("--pause", action="store_true", help="wait for Enter between scenes")
     parser.add_argument("--only", help="comma-separated scene numbers, e.g. 2,3")
+    parser.add_argument(
+        "--captions", action="store_true", help="print a Chinese/English caption per scene"
+    )
+    parser.add_argument(
+        "--auto", action="store_true", help="advance by itself after a reading delay"
+    )
+    parser.add_argument(
+        "--speed", type=float, default=1.0, help="delay multiplier (0.2 for a rehearsal)"
+    )
+    parser.add_argument(
+        "--skip-preflight", action="store_true", help="do not check that Thinking is off"
+    )
     args = parser.parse_args()
     creds = json.loads(args.credentials.read_text(encoding="utf-8"))
     only = {int(x) for x in args.only.split(",")} if args.only else None
-    Demo(args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), creds, args.pause).run(only)
+    if not args.skip_preflight:
+        check_thinking_off()
+    pacer = Pacer(args.captions or args.auto, args.auto, args.speed)
+    demo = Demo(args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), creds, args.pause, pacer)
+    demo.run(only)
+    pacer.finish()
     return 0
 
 

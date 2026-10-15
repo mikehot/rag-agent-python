@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import httpx
+from demo_captions import Pacer, check_thinking_off
 
 from rag_agent.kb_auth import login
 from rag_agent.mcp_client import McpClient
@@ -59,17 +60,22 @@ DOCUMENT = """# 差旅报销制度（演示用合成文档）
 
 
 class Admin:
-    def __init__(self, kb_url: str, agent_url: str, admin: dict, creds: dict, pause: bool) -> None:
+    def __init__(
+        self, kb_url: str, agent_url: str, admin: dict, creds: dict, pause: bool, pacer: Pacer
+    ) -> None:
         self.kb, self.agent, self.pause = kb_url, agent_url, pause
+        self.pacer = pacer
         self.admin_token = login(kb_url, admin["username"], admin["password"])
         self.employee_creds = creds[EMPLOYEE]
         self.http = httpx.Client(timeout=180)
 
     # -- presentation ----------------------------------------------------------------------
     def scene(self, label: str, title: str) -> None:
-        if self.pause:
+        self.pacer.begin()
+        if self.pause and not self.pacer.auto:
             input(f"\n{DIM}[Enter] 进入下一幕{RESET}")
         print(f"\n{BOLD}{CYAN}━━ {label}：{title} ━━{RESET}")
+        self.pacer.caption(label)
 
     def line(self, label: str, text: str, colour: str = "") -> None:
         body = textwrap.fill(str(text).strip(), width=78, subsequent_indent="      ")
@@ -117,7 +123,36 @@ class Admin:
         )
 
     # -- scenes -----------------------------------------------------------------------------
+    def documents_named(self, filename: str) -> list[str]:
+        response = self.http.get(f"{self.kb}/api/documents", headers=self._admin())
+        data = response.json().get("data") or []
+        items = data.get("items", []) if isinstance(data, dict) else data
+        return [d["documentId"] for d in items if d.get("filename") == filename]
+
+    def remove_leftovers(self) -> int:
+        """Delete demo documents left behind by an interrupted earlier run (same file name)."""
+        stale = self.documents_named(FILENAME)
+        for document_id in stale:
+            self.http.delete(f"{self.kb}/api/documents/{document_id}", headers=self._admin())
+        return len(stale)
+
     def run(self, keep: bool) -> None:
+        stale = self.remove_leftovers()
+        if stale:
+            print(
+                f"(removed {stale} leftover demo document(s) from an earlier run)", file=sys.stderr
+            )
+        self._document_id: str | None = None
+        try:
+            self._scenes(keep)
+        finally:
+            # An error or Ctrl+C part-way must not leave a granted document behind.
+            if self._document_id is not None and not keep:
+                self.http.delete(
+                    f"{self.kb}/api/documents/{self._document_id}", headers=self._admin()
+                )
+
+    def _scenes(self, keep: bool) -> None:
         self.scene("B1", "管理员上传一份新文档，等待索引完成")
         response = self.http.post(
             f"{self.kb}/api/documents/upload",
@@ -125,6 +160,7 @@ class Admin:
             files={"file": (FILENAME, DOCUMENT.encode("utf-8"), "text/markdown")},
         )
         document_id = response.json()["data"]["documentId"]
+        self._document_id = document_id
         print(
             f"上传 {BOLD}{FILENAME}{RESET}（{len(DOCUMENT.encode('utf-8'))} 字节），"
             f"documentId {document_id[:8]}…"
@@ -146,11 +182,17 @@ class Admin:
 
         self.scene("B3", "管理员给这位员工授予 READ")
         user_id = self.employee_user_id()
-        grant = self.http.post(
+        granted = self.http.post(
             f"{self.kb}/api/documents/{document_id}/acl",
             headers=self._admin(),
             json={"principalType": "USER", "principalId": user_id, "permission": "READ"},
-        ).json()["data"]
+        )
+        grant = (granted.json() or {}).get("data")
+        if not grant:
+            raise SystemExit(
+                f"the grant did not return an entry (HTTP {granted.status_code}); "
+                "is there a leftover grant for this employee? Re-run the driver."
+            )
         print(
             f"授权：principalType={grant['principalType']}  permission={grant['permission']}  "
             f"aclId {grant['id'][:8]}…"
@@ -174,6 +216,7 @@ class Admin:
                 f"{self.kb}/api/documents/{document_id}", headers=self._admin()
             )
             print(f"删除：HTTP {deleted.status_code}")
+            self._document_id = None  # already removed; nothing for `finally` to do
 
 
 def main() -> int:
@@ -184,12 +227,29 @@ def main() -> int:
     parser.add_argument("--agent-url", default="http://localhost:8090")
     parser.add_argument("--pause", action="store_true", help="wait for Enter between scenes")
     parser.add_argument("--keep", action="store_true", help="do not delete the document at the end")
+    parser.add_argument(
+        "--captions", action="store_true", help="print a Chinese/English caption per scene"
+    )
+    parser.add_argument(
+        "--auto", action="store_true", help="advance by itself after a reading delay"
+    )
+    parser.add_argument(
+        "--speed", type=float, default=1.0, help="delay multiplier (0.2 for a rehearsal)"
+    )
+    parser.add_argument(
+        "--skip-preflight", action="store_true", help="do not check that Thinking is off"
+    )
     args = parser.parse_args()
     admin = json.loads(args.admin_credentials.read_text(encoding="utf-8"))
     creds = json.loads(args.credentials.read_text(encoding="utf-8"))
-    Admin(args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), admin, creds, args.pause).run(
-        args.keep
+    if not args.skip_preflight:
+        check_thinking_off()
+    pacer = Pacer(args.captions or args.auto, args.auto, args.speed)
+    driver = Admin(
+        args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), admin, creds, args.pause, pacer
     )
+    driver.run(args.keep)
+    pacer.finish()
     return 0
 
 
