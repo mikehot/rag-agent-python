@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 import httpx
-from demo_captions import Pacer
+from demo_captions import Pacer, check_thinking_off
 
 from rag_agent.kb_auth import login
 from rag_agent.mcp_client import McpClient
@@ -199,9 +199,14 @@ def main() -> int:
     parser.add_argument(
         "--speed", type=float, default=1.0, help="delay multiplier (0.2 for a rehearsal)"
     )
+    parser.add_argument(
+        "--skip-preflight", action="store_true", help="do not check that Thinking is off"
+    )
     args = parser.parse_args()
     admin = json.loads(args.admin_credentials.read_text(encoding="utf-8"))
     creds = json.loads(args.credentials.read_text(encoding="utf-8"))
+    if not args.skip_preflight:
+        check_thinking_off()
     pacer = Pacer(args.captions or args.auto, args.auto, args.speed)
     driver = Admin(
         args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), admin, creds, args.pause, pacer

@@ -8,9 +8,11 @@ delay for a rehearsal.
 
 from __future__ import annotations
 
+import json
 import sys
 import textwrap
 import time
+import urllib.request
 
 CAPTIONS: dict[str, tuple[str, str]] = {
     "A1": (
@@ -122,3 +124,54 @@ class Pacer:
     def finish(self) -> None:
         if self.auto:
             self._sleep(HOLDS.get(self._key or "", HOLD_AFTER_RESULT))
+
+
+def check_thinking_off(
+    base_url: str = "http://localhost:1234/v1", model: str = "google/gemma-4-26b-a4b-qat"
+) -> None:
+    """Refuse to run the demo while the model server is producing reasoning.
+
+    A model that was unloaded and then loaded again on demand comes back with default settings,
+    which for this model means Thinking is on: every answer becomes slow and the recording would
+    show reasoning-length latencies. A one-sentence request with and without a tool definition is
+    enough to see it.
+    """
+    for with_tool in (False, True):
+        body: dict = {
+            "model": model,
+            "temperature": 0,
+            "max_tokens": 120,
+            "messages": [{"role": "user", "content": "用一句话说明什么是向量数据库。"}],
+        }
+        if with_tool:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_knowledge",
+                        "description": "search",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    },
+                }
+            ]
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json.dumps(body).encode(),
+            {"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                message = json.load(response)["choices"][0]["message"]
+        except Exception as exc:  # any failure means the model is not usable
+            raise SystemExit(f"model server check failed: {type(exc).__name__}: {exc}") from None
+        if (message.get("reasoning_content") or "").strip():
+            raise SystemExit(
+                "Thinking is ON for the loaded model, so every answer would be slow.\n"
+                "In LM Studio: eject the model, load it from the UI, turn Enable Thinking off.\n"
+                "(Loading it from the command line, or letting a request load it on demand, "
+                "resets that setting.) Use --skip-preflight only if you really mean to."
+            )
