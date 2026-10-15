@@ -113,7 +113,11 @@ def create_app(
     sessions = sessions or SessionStore(
         ttl_seconds=settings.session_ttl_seconds, max_sessions=settings.max_sessions
     )
-    limits = Limits(max_turns=settings.max_turns, max_tool_calls=settings.max_tool_calls)
+    limits = Limits(
+        max_turns=settings.max_turns,
+        max_tool_calls=settings.max_tool_calls,
+        enforce_retrieval=settings.enforce_retrieval,
+    )
     runner = run_graph_agent if settings.engine == "graph" else run_agent
     app = FastAPI(title="rag-agent-python", version=__version__)
     app.state.settings = settings

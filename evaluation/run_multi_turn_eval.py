@@ -77,6 +77,7 @@ def main() -> int:
                     "turn2_with_session_ok": passed(t2["expect"], followed),
                     "turn2_alone_ok": passed(t2["expect"], alone),
                     "turn2_searched": len(followed.get("tool_calls", [])) > 0,
+                    "turn2_stop_reason": followed.get("stop_reason"),
                     "turn2_fact_already_in_turn1_answer": in_t1,
                     "answers": {
                         "t1": first.get("answer"),
@@ -95,6 +96,8 @@ def main() -> int:
     print(f"  turn 2 with session : {sum(r['turn2_with_session_ok'] for r in pos)}/{len(pos)}")
     print(f"  turn 2 alone        : {sum(r['turn2_alone_ok'] for r in pos)}/{len(pos)}")
     print(f"  turn 2 ran a search : {sum(r['turn2_searched'] for r in pos)}/{len(pos)}")
+    refused = sum(r["turn2_stop_reason"] == "no_retrieval" for r in rows)
+    print(f"  turn 2 stopped with no_retrieval (all conversations): {refused}/{len(rows)}")
     needs = [r for r in pos if r["turn2_fact_already_in_turn1_answer"] is False]
     searched = sum(r["turn2_searched"] for r in needs)
     correct = sum(r["turn2_with_session_ok"] for r in needs)

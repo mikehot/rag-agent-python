@@ -89,9 +89,11 @@ keep the admin credentials file off screen.
 
 **Do not claim** that revoking also clears what a *remembered* conversation already contains: this
 driver asks without a session. If conversation memory is used, an earlier answer stays in the
-conversation and a follow-up can be answered from it without searching (see the README and the
-two-turn report). Also do not claim anything about propagation across several backend replicas; this
-is one local instance.
+conversation. The agent now retrieves again on every remembered turn and does not answer from the
+conversation without a retrieval (see the README and the
+[enforcement report](../evaluation/reports/enforce-retrieval-local-2026-10-15.md)), but that was
+measured on three valid cases and is not shown in the video. Also do not claim anything about
+propagation across several backend replicas; this is one local instance.
 
 ### A cut that fits 5 minutes
 

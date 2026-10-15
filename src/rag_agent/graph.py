@@ -25,6 +25,8 @@ from langgraph.graph import END, START, StateGraph
 from rag_agent.agent import (
     EMPTY_REPLY_NUDGE,
     NO_ANSWER,
+    NO_RETRIEVAL_ANSWER,
+    RETRIEVAL_NUDGE,
     AgentResult,
     ChatBackend,
     EventSink,
@@ -35,8 +37,10 @@ from rag_agent.agent import (
     assistant_message,
     clean_answer,
     execute_call,
+    gated_sink,
     initial_messages,
     model_turn,
+    retrieval_gate_closed,
     to_openai_tools,
 )
 from rag_agent.llm import LlmError, ToolCall
@@ -48,6 +52,8 @@ class AgentState(TypedDict):
     turns: int
     executed: int
     nudged: bool
+    has_history: bool
+    forced: bool
     answer: str
     stop_reason: str
     done: bool
@@ -70,8 +76,9 @@ def build_graph(
         if state["turns"] >= limits.max_turns:
             return {"done": True, "stop_reason": "turn_limit"}
         turns = state["turns"] + 1
+        closed = retrieval_gate_closed(limits, state["has_history"], state["trace"])
         try:
-            turn = model_turn(chat, state["messages"], openai_tools, on_event)
+            turn = model_turn(chat, state["messages"], openai_tools, gated_sink(on_event, closed))
         except LlmError:
             return {"turns": turns, "done": True, "stop_reason": "model_error"}
         if turn.tool_calls:
@@ -79,6 +86,19 @@ def build_graph(
                 "turns": turns,
                 "messages": [*state["messages"], assistant_message(turn)],
                 "pending": list(turn.tool_calls),
+            }
+        if closed:
+            if state["forced"]:
+                return {
+                    "turns": turns,
+                    "done": True,
+                    "answer": NO_RETRIEVAL_ANSWER,
+                    "stop_reason": "no_retrieval",
+                }
+            return {
+                "turns": turns,
+                "forced": True,
+                "messages": [*state["messages"], {"role": "user", "content": RETRIEVAL_NUDGE}],
             }
         text = clean_answer(turn.content or "")
         if text:
@@ -159,6 +179,8 @@ def run_graph_agent(
         "turns": 0,
         "executed": 0,
         "nudged": False,
+        "has_history": bool(history),
+        "forced": False,
         "answer": NO_ANSWER,
         "stop_reason": "turn_limit",
         "done": False,

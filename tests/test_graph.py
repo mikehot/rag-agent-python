@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from rag_agent.agent import Limits, run_agent
+from rag_agent.agent import NO_RETRIEVAL_ANSWER, Limits, run_agent
 from rag_agent.graph import build_graph, run_graph_agent
 from rag_agent.llm import AssistantTurn, LlmError, ToolCall
 from rag_agent.mcp_client import McpError, ToolResult
@@ -115,6 +115,57 @@ def test_graph_matches_the_reference_loop(name: str) -> None:
     assert graph_tools.calls == loop_tools.calls
     # and the model must have been shown the same conversation
     assert graph_chat.seen == loop_chat.seen
+
+
+HISTORY = [("上一个问题", "上一个答案")]
+
+# Conversations with earlier turns: a final reply needs a successful retrieval in this turn.
+HISTORY_SCENARIOS: dict[str, tuple[Any, Any, Limits]] = {
+    "search_then_answer": (
+        lambda: [search(), say("答案（来自 a.md）")],
+        lambda: FakeTools({"search_knowledge": HIT}),
+        Limits(),
+    ),
+    "answer_from_history_then_nudged_to_search": (
+        lambda: [say("上一个答案里有"), search(), say("检索后的答案")],
+        lambda: FakeTools({"search_knowledge": HIT}),
+        Limits(),
+    ),
+    "never_retrieves": (
+        lambda: [say("上一个答案里有"), say("还是上一个答案里有")],
+        FakeTools,
+        Limits(),
+    ),
+    "empty_reply_without_retrieval": (lambda: [say(""), say("")], FakeTools, Limits()),
+    "refused_retrieval_is_not_retrieval": (
+        lambda: [search(), say("上一个答案里有"), say("上一个答案里有")],
+        lambda: FakeTools({"search_knowledge": REFUSED}),
+        Limits(),
+    ),
+    "enforcement_switched_off": (
+        lambda: [say("上一个答案里有")],
+        FakeTools,
+        Limits(enforce_retrieval=False),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(HISTORY_SCENARIOS))
+def test_graph_matches_the_reference_loop_with_history(name: str) -> None:
+    script, tools, limits = HISTORY_SCENARIOS[name]
+    loop_tools, graph_tools = tools(), tools()
+    loop_chat, graph_chat = ScriptedChat(*script()), ScriptedChat(*script())
+    expected = run_agent("问题", loop_tools, loop_chat, limits, history=HISTORY)
+    actual = run_graph_agent("问题", graph_tools, graph_chat, limits, history=HISTORY)
+    assert snapshot(actual) == snapshot(expected)
+    assert graph_tools.calls == loop_tools.calls
+    assert graph_chat.seen == loop_chat.seen
+    if name in {
+        "never_retrieves",
+        "empty_reply_without_retrieval",
+        "refused_retrieval_is_not_retrieval",
+    }:
+        assert actual.stop_reason == "no_retrieval" and actual.answer == NO_RETRIEVAL_ANSWER
 
 
 def test_policy_reaches_the_graphs_system_message() -> None:
