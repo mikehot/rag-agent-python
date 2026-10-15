@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import httpx
+from demo_captions import Pacer
 
 from rag_agent.kb_auth import login
 from rag_agent.mcp_client import McpClient
@@ -59,17 +60,22 @@ DOCUMENT = """# 差旅报销制度（演示用合成文档）
 
 
 class Admin:
-    def __init__(self, kb_url: str, agent_url: str, admin: dict, creds: dict, pause: bool) -> None:
+    def __init__(
+        self, kb_url: str, agent_url: str, admin: dict, creds: dict, pause: bool, pacer: Pacer
+    ) -> None:
         self.kb, self.agent, self.pause = kb_url, agent_url, pause
+        self.pacer = pacer
         self.admin_token = login(kb_url, admin["username"], admin["password"])
         self.employee_creds = creds[EMPLOYEE]
         self.http = httpx.Client(timeout=180)
 
     # -- presentation ----------------------------------------------------------------------
     def scene(self, label: str, title: str) -> None:
-        if self.pause:
+        self.pacer.begin()
+        if self.pause and not self.pacer.auto:
             input(f"\n{DIM}[Enter] 进入下一幕{RESET}")
         print(f"\n{BOLD}{CYAN}━━ {label}：{title} ━━{RESET}")
+        self.pacer.caption(label)
 
     def line(self, label: str, text: str, colour: str = "") -> None:
         body = textwrap.fill(str(text).strip(), width=78, subsequent_indent="      ")
@@ -184,12 +190,24 @@ def main() -> int:
     parser.add_argument("--agent-url", default="http://localhost:8090")
     parser.add_argument("--pause", action="store_true", help="wait for Enter between scenes")
     parser.add_argument("--keep", action="store_true", help="do not delete the document at the end")
+    parser.add_argument(
+        "--captions", action="store_true", help="print a Chinese/English caption per scene"
+    )
+    parser.add_argument(
+        "--auto", action="store_true", help="advance by itself after a reading delay"
+    )
+    parser.add_argument(
+        "--speed", type=float, default=1.0, help="delay multiplier (0.2 for a rehearsal)"
+    )
     args = parser.parse_args()
     admin = json.loads(args.admin_credentials.read_text(encoding="utf-8"))
     creds = json.loads(args.credentials.read_text(encoding="utf-8"))
-    Admin(args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), admin, creds, args.pause).run(
-        args.keep
+    pacer = Pacer(args.captions or args.auto, args.auto, args.speed)
+    driver = Admin(
+        args.kb_url.rstrip("/"), args.agent_url.rstrip("/"), admin, creds, args.pause, pacer
     )
+    driver.run(args.keep)
+    pacer.finish()
     return 0
 
 
