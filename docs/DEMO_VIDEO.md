@@ -113,9 +113,13 @@ takes and join them.
 
 ### Still not covered
 
-The Flutter client and the A1 **device** spot check (post-revoke ask and citation on a phone) are not in
-either driver; they need a physical device and are described in `docs/DEMO.md` section 8 of the Java
-repository.
+The Flutter client is not in either driver and is not in the recording. A device spot check of the
+**USER** grant path was done on 2026-10-15 on an Android phone (grant, the employee's cited answer,
+revoke, the same question declined with no citation) and is written up in the Java repository
+([report](https://github.com/mikehot/rag-knowledge-base/blob/main/evaluation/reports/flutter-user-acl-revoke-ask-device-local-2026-10-15.md)).
+It was operated by hand and **not recorded**. Still open: a **department** grant on a device (the
+evaluation stack has no departments) and a screen recording of the app. The manual steps are in
+`docs/DEMO.md` section 8 of the Java repository.
 
 ## Recording with no voice
 

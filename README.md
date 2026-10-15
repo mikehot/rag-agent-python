@@ -11,7 +11,9 @@ orchestration, tool selection, and evaluating whether the agent calls tools corr
 
 ## Status
 
-Early scaffold. What exists today:
+A working service with small, pre-registered evaluations. It runs locally against a local model; there is
+no hosted deployment, and every number below comes from datasets of 5 to 27 cases written by one person,
+scored by literal string matching, on one model (Gemma 4 26B, Thinking off).
 
 | Piece | State |
 |---|---|
@@ -19,8 +21,20 @@ Early scaffold. What exists today:
 | `POST /ask`, `POST /ask/stream` | done: bounded agent loop with the caller's own bearer token; SSE streaming; opt-in conversation memory |
 | MCP client for the Java service | done: offline contract tests + 12 live tests (skipped without a knowledge base) |
 | Bounded tool-calling loop | done: turn and tool-call limits, local argument validation, hidden scope arguments |
-| LangGraph version of the same agent | done: `RAG_AGENT_ENGINE=graph`; identical to the loop on 16 scripted scenarios; same pass counts on 5 live sets, and identical output to the loop's second run on the 2 sets checked; see [the report](evaluation/reports/langgraph-local-2026-10-14.md) |
+| LangGraph version of the same agent | done: `RAG_AGENT_ENGINE=graph`; identical to the loop on scripted scenarios (including remembered conversations); same pass counts on 5 live sets; see [the report](evaluation/reports/langgraph-local-2026-10-14.md) |
 | Tool-call evaluation | done: 26 dev + 27 held-out cases, one run per cell; see [the report](evaluation/reports/tool-calls-v1-local-2026-10-14.md) |
+| Cross-document questions | done, **opt-in**: `RAG_AGENT_POLICY=decompose`. On 12 compound questions the Java single retrieval passed 6, the agent 9, decomposition 12, with the held-out control unchanged (26/27); an observation on twelve questions, not an established effect ([report](evaluation/reports/cross-document-decomposition-local-2026-10-14.md)) |
+| Conversation memory | done, opt-in, in-process; follow-ups 5/8 with a session vs 2/8 without ([report](evaluation/reports/multi-turn-local-2026-10-14.md)) |
+| Retrieval enforced on every remembered turn | done: revoked-document repeat 3/3 off, 0/3 on, three valid cases ([report](evaluation/reports/enforce-retrieval-local-2026-10-15.md)) |
+| OpenTelemetry tracing | done: allow-listed attributes only, console output only (no network exporter) |
+| Docker / compose | done: non-root, read-only filesystem, health check; one-command stack with the Java repository |
+| CI | `uv sync --locked`, `ruff check`, `ruff format --check`, `pytest` on pushes to `main` and on every pull request |
+| Demo | scripted drivers (`scripts/demo.py`, `scripts/demo_admin.py`) and a silent 3 min 47 s terminal recording in the Java repository ([notes](docs/DEMO_VIDEO.md)) |
+
+**Not done:** a network trace exporter; a session store shared between processes (sessions are
+in-process, so several replicas are untested); rate limiting and any load test; evaluation on a second
+model; a larger or independently written test set; and the fixed refusal after a failed retry has never
+been triggered by a live model.
 
 ## Try it
 
@@ -131,8 +145,9 @@ The full account, including what the numbers do not show, is in the
 ## Plan
 
 1. ~~MCP client with contract tests~~, ~~bounded agent loop~~, ~~tool-call evaluation~~, ~~held-out set~~.
-2. Repeats that include a model-server restart; look at the wrong "not in the knowledge base" answers (H2-05).
-3. Wire the loop to `POST /ask`, then: LangGraph wrapper, streaming, multi-turn memory.
+2. ~~`POST /ask`, LangGraph version, streaming, opt-in memory, tracing, Docker, demo recording~~.
+3. Open: repeats that include a model-server restart; the wrong "not in the knowledge base" answers
+   (H2-05); a second model on the same sets; a session store that survives more than one process.
 
 Everything runs locally against a local model. No hosted service is assumed.
 
