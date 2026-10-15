@@ -123,7 +123,36 @@ class Admin:
         )
 
     # -- scenes -----------------------------------------------------------------------------
+    def documents_named(self, filename: str) -> list[str]:
+        response = self.http.get(f"{self.kb}/api/documents", headers=self._admin())
+        data = response.json().get("data") or []
+        items = data.get("items", []) if isinstance(data, dict) else data
+        return [d["documentId"] for d in items if d.get("filename") == filename]
+
+    def remove_leftovers(self) -> int:
+        """Delete demo documents left behind by an interrupted earlier run (same file name)."""
+        stale = self.documents_named(FILENAME)
+        for document_id in stale:
+            self.http.delete(f"{self.kb}/api/documents/{document_id}", headers=self._admin())
+        return len(stale)
+
     def run(self, keep: bool) -> None:
+        stale = self.remove_leftovers()
+        if stale:
+            print(
+                f"(removed {stale} leftover demo document(s) from an earlier run)", file=sys.stderr
+            )
+        self._document_id: str | None = None
+        try:
+            self._scenes(keep)
+        finally:
+            # An error or Ctrl+C part-way must not leave a granted document behind.
+            if self._document_id is not None and not keep:
+                self.http.delete(
+                    f"{self.kb}/api/documents/{self._document_id}", headers=self._admin()
+                )
+
+    def _scenes(self, keep: bool) -> None:
         self.scene("B1", "管理员上传一份新文档，等待索引完成")
         response = self.http.post(
             f"{self.kb}/api/documents/upload",
@@ -131,6 +160,7 @@ class Admin:
             files={"file": (FILENAME, DOCUMENT.encode("utf-8"), "text/markdown")},
         )
         document_id = response.json()["data"]["documentId"]
+        self._document_id = document_id
         print(
             f"上传 {BOLD}{FILENAME}{RESET}（{len(DOCUMENT.encode('utf-8'))} 字节），"
             f"documentId {document_id[:8]}…"
@@ -152,11 +182,17 @@ class Admin:
 
         self.scene("B3", "管理员给这位员工授予 READ")
         user_id = self.employee_user_id()
-        grant = self.http.post(
+        granted = self.http.post(
             f"{self.kb}/api/documents/{document_id}/acl",
             headers=self._admin(),
             json={"principalType": "USER", "principalId": user_id, "permission": "READ"},
-        ).json()["data"]
+        )
+        grant = (granted.json() or {}).get("data")
+        if not grant:
+            raise SystemExit(
+                f"the grant did not return an entry (HTTP {granted.status_code}); "
+                "is there a leftover grant for this employee? Re-run the driver."
+            )
         print(
             f"授权：principalType={grant['principalType']}  permission={grant['permission']}  "
             f"aclId {grant['id'][:8]}…"
@@ -180,6 +216,7 @@ class Admin:
                 f"{self.kb}/api/documents/{document_id}", headers=self._admin()
             )
             print(f"删除：HTTP {deleted.status_code}")
+            self._document_id = None  # already removed; nothing for `finally` to do
 
 
 def main() -> int:
