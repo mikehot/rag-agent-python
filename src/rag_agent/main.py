@@ -183,8 +183,8 @@ def create_app(
     app.state.sessions = sessions
 
     def prepare(request: AskRequest, authorization: str | None):
-        """Authenticate and resolve the conversation. Returns (token, session_id, history) or an
-        error response."""
+        """Authenticate and resolve the conversation. Returns (token, session_id, history, created)
+        or an error response. ``created`` is true when this request opened the session."""
         token = bearer_token(authorization)
         if token is None:
             return error(
@@ -192,6 +192,7 @@ def create_app(
             )
         session_id: str | None = None
         history = None
+        created = False
         if request.session_id is not None:
             history = sessions.history(request.session_id, token)
             if history is None:
@@ -200,7 +201,15 @@ def create_app(
         elif request.remember:
             session_id = sessions.create(token)
             history = []
-        return token, session_id, history
+            created = True
+        return token, session_id, history, created
+
+    def discard_if_new(session_id: str | None, token: str, created: bool) -> None:
+        # The session exists before the knowledge base has judged the token. When it rejects it,
+        # nothing may be left behind: the entry could never be used, and a flood of bogus tokens
+        # would otherwise push real sessions out of the bounded store.
+        if created and session_id is not None:
+            sessions.forget(session_id, token)
 
     def execute(request: AskRequest, token: str, history, on_event=None) -> AgentResult:
         with telemetry.tracer().start_as_current_span("agent.ask") as span:
@@ -245,11 +254,12 @@ def create_app(
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
             return prepared
-        token, session_id, history = prepared
+        token, session_id, history, created = prepared
         request_id = uuid.uuid4().hex[:12]
         try:
             result = execute(request, token, history)
         except McpError as exc:
+            discard_if_new(session_id, token, created)  # the error carries no session id
             return failure(exc, request_id)
         log.info(
             "request=%s stop=%s turns=%s tools=%s",
@@ -259,6 +269,7 @@ def create_app(
             len(result.trace),
         )
         if result.stop_reason == "model_error":
+            discard_if_new(session_id, token, created)
             return error(502, "model_unavailable", "the language model did not respond")
         remember_turn(request, token, session_id, result)
         return to_response(result, session_id)
@@ -274,7 +285,7 @@ def create_app(
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
             return prepared
-        token, session_id, history = prepared
+        token, session_id, history, created = prepared
         request_id = uuid.uuid4().hex[:12]
         events: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
@@ -296,6 +307,8 @@ def create_app(
                     events.put(("answer", to_response(result, session_id).model_dump()))
             except McpError as exc:
                 response = failure(exc, request_id)
+                if response.status_code == 401:
+                    discard_if_new(session_id, token, created)
                 events.put(("error", json.loads(response.body)))
             except Exception:  # the stream must always end with an event
                 log.exception("request=%s unexpected failure", request_id)

@@ -352,3 +352,29 @@ def test_complete_stream_skips_a_chunk_that_is_not_an_object() -> None:
         [], [], lambda text: None
     )
     assert turn.content == "好"
+
+
+def test_a_token_the_knowledge_base_rejects_leaves_no_session_behind() -> None:
+    # The session is created before the knowledge base has looked at the token. Without cleanup,
+    # anyone could fill the store with bogus-token requests and push real sessions out of it.
+    from rag_agent.mcp_client import McpError
+
+    client, _ = build(FakeKb(TOKEN, fail=McpError("no", status=401)), Scripted())
+    store = client.app.state.sessions
+    body = {"question": "q", "remember": True}
+    assert client.post("/ask", json=body, headers=AUTH).status_code == 401
+    assert len(store) == 0
+    events = parse_sse(client.post("/ask/stream", json=body, headers=AUTH).text)
+    assert events[1][1]["error"] == "unauthorized"
+    assert len(store) == 0
+
+
+def test_a_rejected_token_does_not_discard_a_session_that_already_existed() -> None:
+    from rag_agent.mcp_client import McpError
+
+    client, _ = build(FakeKb(TOKEN, fail=McpError("no", status=401)), Scripted())
+    store = client.app.state.sessions
+    sid = store.create(TOKEN)
+    body = {"question": "q", "session_id": sid}
+    assert client.post("/ask", json=body, headers=AUTH).status_code == 401
+    assert store.history(sid, TOKEN) == []
