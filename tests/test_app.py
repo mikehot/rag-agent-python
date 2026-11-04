@@ -238,3 +238,19 @@ def test_health_does_not_wait_for_the_worker_thread_pool() -> None:
     client, _ = build()
     route = next(r for r in client.app.routes if getattr(r, "path", None) == "/health")
     assert inspect.iscoroutinefunction(route.endpoint)
+
+
+def test_an_oversized_body_is_rejected_before_it_is_parsed() -> None:
+    client, _ = build(chat=Scripted(AssistantTurn("好")), max_body_bytes=1000)
+    big = b'{"question":"' + b"a" * 5000 + b'"}'
+    headers = {**AUTH, "content-type": "application/json"}
+    declared = client.post("/ask", content=big, headers=headers)
+    assert declared.status_code == 413 and declared.json()["error"] == "request_too_large"
+    assert client.post("/ask/stream", content=big, headers=headers).status_code == 413
+
+    def chunks():  # no Content-Length: sent chunked
+        for i in range(0, len(big), 500):
+            yield big[i : i + 500]
+
+    assert client.post("/ask", content=chunks(), headers=headers).status_code == 413
+    assert client.post("/ask", json={"question": "q"}, headers=AUTH).status_code == 200

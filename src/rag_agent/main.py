@@ -100,6 +100,57 @@ def error(status: int, code: str, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code, "detail": detail})
 
 
+class BodyLimit:
+    """Reject request bodies over ``limit`` bytes with 413, before FastAPI buffers and parses them.
+
+    Checks the declared Content-Length first and counts the bytes of chunked bodies as they arrive,
+    so a body without a Content-Length cannot get past it.
+    """
+
+    def __init__(self, app, limit: int) -> None:
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        too_large = JSONResponse(
+            status_code=413,
+            content={"error": "request_too_large", "detail": "the request body is too large"},
+        )
+        declared = dict(scope["headers"]).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.limit:
+            await too_large(scope, receive, send)
+            return
+        seen = 0
+        rejected = False
+
+        async def limited_receive():
+            nonlocal seen, rejected
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > self.limit:
+                    rejected = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def guarded_send(message) -> None:
+            if rejected and message["type"] == "http.response.start":
+                await too_large(scope, receive, send)
+                raise _Dropped
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except _Dropped:
+            return
+
+
+class _Dropped(Exception):
+    pass
+
+
 def create_app(
     settings: Settings | None = None,
     kb_factory: KbFactory | None = None,
@@ -128,6 +179,7 @@ def create_app(
     runner = run_graph_agent if settings.engine == "graph" else run_agent
     app = FastAPI(title="rag-agent-python", version=__version__)
     app.state.settings = settings
+    app.add_middleware(BodyLimit, limit=settings.max_body_bytes)
     app.state.sessions = sessions
 
     def prepare(request: AskRequest, authorization: str | None):
