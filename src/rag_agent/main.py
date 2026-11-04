@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
-import queue
 import threading
 import uuid
 from collections.abc import Callable
@@ -151,6 +152,56 @@ class _Dropped(Exception):
     pass
 
 
+class Cancelled(Exception):
+    """The client went away; stop spending model and knowledge-base time on its behalf."""
+
+
+class _CancelAware:
+    """Raises ``Cancelled`` at the next model or tool call once ``cancel`` is set.
+
+    Wraps the two backends from outside, so the agent loop (and the LangGraph version) run exactly
+    the code that was evaluated; a call already in flight is not interrupted, the next one never
+    starts.
+    """
+
+    def __init__(self, inner: Any, cancel: threading.Event) -> None:
+        self._inner, self._cancel = inner, cancel
+
+    def _check(self) -> None:
+        if self._cancel.is_set():
+            raise Cancelled
+
+    def __getattr__(self, name: str) -> Any:
+        target = getattr(self._inner, name)  # AttributeError stays one (hasattr checks rely on it)
+        if name not in ("complete", "complete_stream", "list_tools", "call_tool"):
+            return target
+
+        def guarded(*args: Any, **kwargs: Any) -> Any:
+            self._check()
+            return target(*args, **kwargs)
+
+        return guarded
+
+
+class CancelOnExit(StreamingResponse):
+    """A streaming response that sets ``cancel`` when the response ends for any reason.
+
+    Normal completion ends the response after the worker has finished, so setting the flag then is
+    a no-op; a client disconnect or a failed send ends it early and the worker stops at its next
+    model or tool call.
+    """
+
+    def __init__(self, content: Any, cancel: threading.Event, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._cancel = cancel
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._cancel.set()
+
+
 def create_app(
     settings: Settings | None = None,
     kb_factory: KbFactory | None = None,
@@ -169,7 +220,9 @@ def create_app(
         timeout=settings.llm_timeout_seconds,
     )
     sessions = sessions or SessionStore(
-        ttl_seconds=settings.session_ttl_seconds, max_sessions=settings.max_sessions
+        ttl_seconds=settings.session_ttl_seconds,
+        max_sessions=settings.max_sessions,
+        max_sessions_per_owner=settings.max_sessions_per_owner,
     )
     limits = Limits(
         max_turns=settings.max_turns,
@@ -181,6 +234,26 @@ def create_app(
     app.state.settings = settings
     app.add_middleware(BodyLimit, limit=settings.max_body_bytes)
     app.state.sessions = sessions
+    gate = (
+        threading.BoundedSemaphore(settings.max_concurrent_asks)
+        if (settings.max_concurrent_asks > 0)
+        else None
+    )
+
+    def try_acquire() -> bool:
+        return gate is None or gate.acquire(blocking=False)
+
+    def release() -> None:
+        if gate is not None:
+            gate.release()
+
+    def busy() -> JSONResponse:
+        # Fixed text: no limit value, no counts, nothing about who else is using the service.
+        return JSONResponse(
+            status_code=429,
+            content={"error": "too_many_requests", "detail": "the service is busy; retry shortly"},
+            headers={"Retry-After": "1"},
+        )
 
     def prepare(request: AskRequest, authorization: str | None):
         """Authenticate and resolve the conversation. Returns (token, session_id, history, created)
@@ -211,7 +284,9 @@ def create_app(
         if created and session_id is not None:
             sessions.forget(session_id, token)
 
-    def execute(request: AskRequest, token: str, history, on_event=None) -> AgentResult:
+    def execute(
+        request: AskRequest, token: str, history, on_event=None, cancel=None
+    ) -> AgentResult:
         with telemetry.tracer().start_as_current_span("agent.ask") as span:
             telemetry.set_attributes(
                 span,
@@ -221,8 +296,12 @@ def create_app(
                 agent__has_history=bool(history),
             )
             with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
+                if cancel is not None:
+                    kb_, chat_ = _CancelAware(kb, cancel), _CancelAware(chat, cancel)
+                else:
+                    kb_, chat_ = kb, chat
                 result = runner(
-                    request.question, kb, chat, limits, settings.policy, history, on_event
+                    request.question, kb_, chat_, limits, settings.policy, history, on_event
                 )
             telemetry.set_attributes(
                 span,
@@ -251,6 +330,14 @@ def create_app(
 
     @app.post("/ask", response_model=AskResponse)
     def ask(request: AskRequest, authorization: str | None = Header(default=None)) -> Any:
+        if not try_acquire():
+            return busy()
+        try:
+            return answer_once(request, authorization)
+        finally:
+            release()
+
+    def answer_once(request: AskRequest, authorization: str | None) -> Any:
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
             return prepared
@@ -275,25 +362,43 @@ def create_app(
         return to_response(result, session_id)
 
     @app.post("/ask/stream")
-    def ask_stream(request: AskRequest, authorization: str | None = Header(default=None)) -> Any:
+    async def ask_stream(
+        request: AskRequest, authorization: str | None = Header(default=None)
+    ) -> Any:
         """Server-sent events: ``session``, ``tool_call``, ``delta``, then ``answer`` and ``done``.
 
         ``delta`` text is a preview; the ``answer`` event is authoritative (it has control markers
         removed, and is what ``cited_documents`` was computed from). Failures before streaming
         starts use ordinary HTTP errors; a failure afterwards arrives as an ``error`` event.
+        If the client disconnects, the worker stops at its next model or tool call.
         """
+        if not try_acquire():
+            return busy()
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
+            release()
             return prepared
         token, session_id, history, created = prepared
         request_id = uuid.uuid4().hex[:12]
-        events: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
+        loop = asyncio.get_running_loop()
+        events: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        cancel = threading.Event()
+
+        def put(item: tuple[str, dict[str, Any]] | None) -> None:
+            # RuntimeError: the loop is gone (server shutting down); nobody is listening.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(events.put_nowait, item)
+
+        def on_event(event: dict[str, Any]) -> None:
+            if cancel.is_set():
+                raise Cancelled  # also abandons a model call that is still streaming deltas
+            put((event.pop("type"), event))
 
         def work() -> None:
             try:
-                result = execute(request, token, history, lambda e: events.put((e.pop("type"), e)))
+                result = execute(request, token, history, on_event, cancel)
                 if result.stop_reason == "model_error":
-                    events.put(
+                    put(
                         (
                             "error",
                             {
@@ -304,28 +409,33 @@ def create_app(
                     )
                 else:
                     remember_turn(request, token, session_id, result)
-                    events.put(("answer", to_response(result, session_id).model_dump()))
+                    put(("answer", to_response(result, session_id).model_dump()))
+            except Cancelled:
+                log.info("request=%s client disconnected; work cancelled", request_id)
+                discard_if_new(session_id, token, created)
             except McpError as exc:
                 response = failure(exc, request_id)
                 if response.status_code == 401:
                     discard_if_new(session_id, token, created)
-                events.put(("error", json.loads(response.body)))
+                put(("error", json.loads(response.body)))
             except Exception:  # the stream must always end with an event
                 log.exception("request=%s unexpected failure", request_id)
-                events.put(("error", {"error": "internal_error", "detail": "unexpected failure"}))
+                put(("error", {"error": "internal_error", "detail": "unexpected failure"}))
             finally:
-                events.put(None)
+                put(None)
+                release()
 
-        def stream():
+        async def stream():
             if session_id is not None:
                 yield sse("session", {"session_id": session_id})
-            threading.Thread(target=work, daemon=True).start()
-            while (item := events.get()) is not None:
+            while (item := await events.get()) is not None:
                 yield sse(*item)
             yield sse("done", {})
 
-        return StreamingResponse(
+        threading.Thread(target=work, daemon=True).start()
+        return CancelOnExit(
             stream(),
+            cancel,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,13 @@ class Settings(BaseSettings):
 
     session_ttl_seconds: float = 1800.0
     max_sessions: int = 1000
+    # Most sessions one token may hold; at the limit its own oldest is dropped, never another
+    # owner's. 0 = no per-owner limit.
+    max_sessions_per_owner: int = Field(default=20, ge=0)
+
+    # Most /ask and /ask/stream requests running at once; the rest get 429 + Retry-After.
+    # 0 (default) = unlimited, i.e. the behaviour of every earlier version.
+    max_concurrent_asks: int = Field(default=0, ge=0)
 
     max_turns: int = 4
     max_tool_calls: int = 3

@@ -38,12 +38,15 @@ class SessionStore:
         *,
         ttl_seconds: float = 1800.0,
         max_sessions: int = 1000,
+        max_sessions_per_owner: int = 0,
         max_turns: int = 6,
         max_answer_chars: int = 2000,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._ttl = ttl_seconds
         self._max_sessions = max_sessions
+        # 0 = no per-owner limit. Otherwise an owner at its limit loses its own oldest session.
+        self._max_per_owner = max_sessions_per_owner
         self._max_turns = max_turns
         self._max_answer_chars = max_answer_chars
         self._clock = clock
@@ -62,11 +65,21 @@ class SessionStore:
     def create(self, token: str) -> str:
         with self._lock:
             self._expire()
+            owner = self._owner(token)
+            if self._max_per_owner > 0:
+                # Make room from the caller's own sessions first, so one owner cannot push
+                # anybody else's out of the store.
+                mine = sorted(
+                    (k for k, s in self._sessions.items() if s.owner == owner),
+                    key=lambda k: self._sessions[k].touched,
+                )
+                for key in mine[: max(0, len(mine) - self._max_per_owner + 1)]:
+                    del self._sessions[key]
             while len(self._sessions) >= self._max_sessions:
                 oldest = min(self._sessions, key=lambda k: self._sessions[k].touched)
                 del self._sessions[oldest]
             session_id = secrets.token_urlsafe(18)
-            self._sessions[session_id] = _Session(self._owner(token), touched=self._clock())
+            self._sessions[session_id] = _Session(owner, touched=self._clock())
             return session_id
 
     def history(self, session_id: str, token: str) -> list[tuple[str, str]] | None:

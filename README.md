@@ -32,7 +32,7 @@ scored by literal string matching, on one model (Gemma 4 26B, Thinking off).
 | Demo | scripted drivers (`scripts/demo.py`, `scripts/demo_admin.py`) and a silent 3 min 47 s terminal recording in the Java repository ([notes](docs/DEMO_VIDEO.md)) |
 
 **Not done:** a network trace exporter; a session store shared between processes (sessions are
-in-process, so several replicas are untested); rate limiting and any load test; evaluation on a second
+in-process, so several replicas are untested); per-client rate limiting and any load test (a global concurrency cap and per-owner session quota exist, both described below); evaluation on a second
 model; a larger or independently written test set; and the fixed refusal after a failed retry has never
 been triggered by a live model.
 
@@ -173,6 +173,21 @@ uv run python evaluation/run_tool_eval.py --dataset evaluation/datasets/tool_cal
 ```
 
 Configuration comes from `RAG_AGENT_*` environment variables (see `src/rag_agent/config.py`).
+The limits-related ones:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RAG_AGENT_MAX_SESSIONS` | `1000` | Sessions held in memory in total; the oldest is dropped when full |
+| `RAG_AGENT_MAX_SESSIONS_PER_OWNER` | `20` | Sessions one token may hold; at the limit that token's **own** least recently used session is dropped, never another user's. `0` = no per-owner limit |
+| `RAG_AGENT_MAX_CONCURRENT_ASKS` | `0` | Most `/ask` and `/ask/stream` requests running at once; extra ones get `429` with `Retry-After`. `0` = unlimited (the previous behaviour). `/health` is never counted. Keep it below 40, the size of the server's worker pool |
+| `RAG_AGENT_MAX_BODY_BYTES` | `65536` | Largest request body |
+
+Limits that remain: there is no per-client **rate** limit (put one at the gateway); the caps are per
+process; a client that disconnects from `/ask/stream` stops the work at the next model or tool call, but a
+call already in flight is not interrupted; the non-streaming `/ask` cannot notice a disconnect. Session
+quotas are per token, so many distinct tokens still each get their own allowance. Defaults leave the
+evaluated behaviour unchanged: the agent loop is untouched and the cap is off.
+See [the review](docs/REVIEW-2026-11.md) (M2, M4).
 Credentials for the knowledge base are never stored in the repository.
 
 ## License
