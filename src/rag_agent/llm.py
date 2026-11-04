@@ -118,9 +118,15 @@ class ChatClient:
                         chunk = json.loads(payload)
                     except ValueError:
                         continue
+                    if not isinstance(chunk, dict):
+                        continue
                     if isinstance(chunk.get("usage"), dict):
                         usage = chunk["usage"]
                     for choice in chunk.get("choices") or []:
+                        if not isinstance(choice, dict) or not isinstance(
+                            choice.get("delta") or {}, dict
+                        ):
+                            raise LlmError("model server returned a malformed stream chunk")
                         delta = choice.get("delta") or {}
                         text = delta.get("content")
                         if isinstance(text, str) and text:
@@ -129,12 +135,13 @@ class ChatClient:
                             if shown:
                                 on_delta(shown)
                         for raw in delta.get("tool_calls") or []:
-                            slot = calls.setdefault(
-                                int(raw.get("index", 0)), {"id": "", "name": "", "arguments": ""}
-                            )
+                            index = raw.get("index", 0) if isinstance(raw, dict) else None
+                            function = raw.get("function") or {} if isinstance(raw, dict) else None
+                            if not isinstance(index, int) or not isinstance(function, dict):
+                                raise LlmError("model server returned a malformed tool call")
+                            slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
                             if raw.get("id"):
                                 slot["id"] = str(raw["id"])
-                            function = raw.get("function") or {}
                             if function.get("name"):
                                 slot["name"] = str(function["name"])
                             if function.get("arguments"):
@@ -179,10 +186,15 @@ class ChatClient:
             data = response.json()
             choice = data["choices"][0]
             message = choice["message"]
+            if not isinstance(choice, dict) or not isinstance(message, dict):
+                raise TypeError
+            raw_calls = message.get("tool_calls") or []
+            if not isinstance(raw_calls, list):
+                raise TypeError
         except (ValueError, KeyError, IndexError, TypeError):
             raise LlmError("model server returned a malformed completion") from None
         calls = []
-        for raw in message.get("tool_calls") or []:
+        for raw in raw_calls:
             try:
                 function = raw["function"]
                 calls.append(
@@ -192,7 +204,7 @@ class ChatClient:
                         arguments_raw=str(function.get("arguments") or "{}"),
                     )
                 )
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, AttributeError):
                 raise LlmError("model server returned a malformed tool call") from None
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         return AssistantTurn(

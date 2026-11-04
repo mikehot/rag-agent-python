@@ -298,3 +298,57 @@ def test_stream_reports_a_late_failure_as_an_error_event() -> None:
     events = parse_sse(client.post("/ask/stream", json={"question": "q"}, headers=AUTH).text)
     assert events[0][0] == "error" and events[0][1]["error"] == "knowledge_base_unavailable"
     assert events[-1][0] == "done"
+
+
+# ------------------------- a malformed model reply is an LlmError, not a crash
+
+
+def _sse_client(*chunks: Any) -> ChatClient:
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    return ChatClient(
+        "http://m", "m", transport=httpx.MockTransport(lambda r: httpx.Response(200, text=body))
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"choices": [{"message": "text"}]},
+        {"choices": [{"message": ["x"]}]},
+        {"choices": [{"message": {"tool_calls": "x"}}]},
+        {"choices": ["x"]},
+        [1],
+    ],
+)
+def test_complete_reports_a_malformed_reply_as_an_llm_error(payload: Any) -> None:
+    from rag_agent.llm import LlmError
+
+    chat = ChatClient(
+        "http://m", "m", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
+    )
+    with pytest.raises(LlmError):
+        chat.complete([], [])
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {"choices": ["x"]},
+        {"choices": [{"delta": "x"}]},
+        {"choices": [{"delta": {"tool_calls": ["x"]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": "x", "function": {"name": "a"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"function": "x"}]}}]},
+    ],
+)
+def test_complete_stream_reports_a_malformed_chunk_as_an_llm_error(chunk: Any) -> None:
+    from rag_agent.llm import LlmError
+
+    with pytest.raises(LlmError):
+        _sse_client(chunk).complete_stream([], [], lambda text: None)
+
+
+def test_complete_stream_skips_a_chunk_that_is_not_an_object() -> None:
+    turn = _sse_client([1], {"choices": [{"delta": {"content": "好"}}]}).complete_stream(
+        [], [], lambda text: None
+    )
+    assert turn.content == "好"
