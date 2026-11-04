@@ -185,7 +185,7 @@ def create_app(
         return error(502, "knowledge_base_unavailable", "the knowledge base could not be reached")
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok", "service": "rag-agent-python", "version": __version__}
 
     @app.post("/ask", response_model=AskResponse)

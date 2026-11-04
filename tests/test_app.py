@@ -226,3 +226,15 @@ def test_a_token_that_cannot_be_a_header_value_is_unauthorized_not_a_crash() -> 
     for header in ("Bearer café", "Bearer a b", "Bearer a\tb", "Bearer \x7f", "Bearer 中文"):
         assert bearer_token(header) is None, header
     assert bearer_token("Bearer abc.DEF-123_~+/=") == "abc.DEF-123_~+/="
+
+
+def test_health_does_not_wait_for_the_worker_thread_pool() -> None:
+    # Every /ask runs in the shared thread pool (40 threads) for as long as the model takes. A
+    # plain `def` health check queues behind them, so the container health check times out under
+    # load. Measured: 60 concurrent 4 s requests delayed /health by 3.5 s. Serving it from the
+    # event loop avoids the queue.
+    import inspect
+
+    client, _ = build()
+    route = next(r for r in client.app.routes if getattr(r, "path", None) == "/health")
+    assert inspect.iscoroutinefunction(route.endpoint)
