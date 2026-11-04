@@ -218,3 +218,11 @@ def test_unknown_agent_settings_are_reported_not_silently_ignored(monkeypatch) -
         "UNRELATED": "x",
     }
     assert unknown_settings(environ) == ["RAG_AGENT_POLICYY", "RAG_AGENT_made_up"]
+
+
+def test_a_token_that_cannot_be_a_header_value_is_unauthorized_not_a_crash() -> None:
+    # Starlette hands over header bytes decoded as latin-1; the knowledge-base client encodes the
+    # header as ASCII and used to raise UnicodeEncodeError (an HTTP 500) for such a token.
+    for header in ("Bearer café", "Bearer a b", "Bearer a\tb", "Bearer \x7f", "Bearer 中文"):
+        assert bearer_token(header) is None, header
+    assert bearer_token("Bearer abc.DEF-123_~+/=") == "abc.DEF-123_~+/="

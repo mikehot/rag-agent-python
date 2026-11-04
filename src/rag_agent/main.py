@@ -67,7 +67,14 @@ def bearer_token(authorization: str | None) -> str | None:
         return None
     scheme, _, value = authorization.partition(" ")
     value = value.strip()
-    return value if scheme.lower() == "bearer" and value else None
+    if scheme.lower() != "bearer" or not value:
+        return None
+    # A token is forwarded as an HTTP header value, so it must be visible ASCII without spaces.
+    # Anything else (a latin-1 byte, a control character) cannot be a real token and would make
+    # the knowledge-base client raise an encoding error, which surfaced as an HTTP 500.
+    if not (value.isascii() and value.isprintable() and " " not in value):
+        return None
+    return value
 
 
 def cited_filenames(result: AgentResult) -> list[str]:
