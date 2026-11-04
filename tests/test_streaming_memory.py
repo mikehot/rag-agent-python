@@ -298,3 +298,134 @@ def test_stream_reports_a_late_failure_as_an_error_event() -> None:
     events = parse_sse(client.post("/ask/stream", json={"question": "q"}, headers=AUTH).text)
     assert events[0][0] == "error" and events[0][1]["error"] == "knowledge_base_unavailable"
     assert events[-1][0] == "done"
+
+
+# ------------------------- a malformed model reply is an LlmError, not a crash
+
+
+def _sse_client(*chunks: Any) -> ChatClient:
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    return ChatClient(
+        "http://m", "m", transport=httpx.MockTransport(lambda r: httpx.Response(200, text=body))
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"choices": [{"message": "text"}]},
+        {"choices": [{"message": ["x"]}]},
+        {"choices": [{"message": {"tool_calls": "x"}}]},
+        {"choices": ["x"]},
+        [1],
+    ],
+)
+def test_complete_reports_a_malformed_reply_as_an_llm_error(payload: Any) -> None:
+    from rag_agent.llm import LlmError
+
+    chat = ChatClient(
+        "http://m", "m", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
+    )
+    with pytest.raises(LlmError):
+        chat.complete([], [])
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {"choices": ["x"]},
+        {"choices": [{"delta": "x"}]},
+        {"choices": [{"delta": {"tool_calls": ["x"]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": "x", "function": {"name": "a"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"function": "x"}]}}]},
+    ],
+)
+def test_complete_stream_reports_a_malformed_chunk_as_an_llm_error(chunk: Any) -> None:
+    from rag_agent.llm import LlmError
+
+    with pytest.raises(LlmError):
+        _sse_client(chunk).complete_stream([], [], lambda text: None)
+
+
+def test_complete_stream_skips_a_chunk_that_is_not_an_object() -> None:
+    turn = _sse_client([1], {"choices": [{"delta": {"content": "好"}}]}).complete_stream(
+        [], [], lambda text: None
+    )
+    assert turn.content == "好"
+
+
+def test_a_token_the_knowledge_base_rejects_leaves_no_session_behind() -> None:
+    # The session is created before the knowledge base has looked at the token. Without cleanup,
+    # anyone could fill the store with bogus-token requests and push real sessions out of it.
+    from rag_agent.mcp_client import McpError
+
+    client, _ = build(FakeKb(TOKEN, fail=McpError("no", status=401)), Scripted())
+    store = client.app.state.sessions
+    body = {"question": "q", "remember": True}
+    assert client.post("/ask", json=body, headers=AUTH).status_code == 401
+    assert len(store) == 0
+    events = parse_sse(client.post("/ask/stream", json=body, headers=AUTH).text)
+    assert events[1][1]["error"] == "unauthorized"
+    assert len(store) == 0
+
+
+def test_a_rejected_token_does_not_discard_a_session_that_already_existed() -> None:
+    from rag_agent.mcp_client import McpError
+
+    client, _ = build(FakeKb(TOKEN, fail=McpError("no", status=401)), Scripted())
+    store = client.app.state.sessions
+    sid = store.create(TOKEN)
+    body = {"question": "q", "session_id": sid}
+    assert client.post("/ask", json=body, headers=AUTH).status_code == 401
+    assert store.history(sid, TOKEN) == []
+
+
+# ------------------------------------------- security properties that had no test of their own
+
+
+def test_the_token_never_reaches_a_response_an_sse_event_or_a_log_on_any_failure_path(
+    caplog,
+) -> None:
+    import logging
+
+    from rag_agent.llm import LlmError
+    from rag_agent.mcp_client import McpError
+
+    secret = "tok-SECRET-0123456789"
+    auth = {"Authorization": f"Bearer {secret}"}
+
+    class Boom(Scripted):
+        def complete(self, messages, tools):
+            raise RuntimeError("unexpected")
+
+    scenarios = [
+        (FakeKb(secret, fail=McpError(f"rejected {secret}", status=401)), Scripted()),
+        (FakeKb(secret, fail=McpError(f"down {secret}")), Scripted()),
+        (FakeKb(secret), Scripted(LlmError(f"model {secret}"))),
+        (FakeKb(secret), Boom()),
+    ]
+    caplog.set_level(logging.DEBUG)
+    seen = []
+    for kb, chat in scenarios:
+        client, _ = build(kb, chat)
+        client = type(client)(client.app, raise_server_exceptions=False)
+        for path in ("/ask", "/ask/stream"):
+            response = client.post(path, json={"question": "q", "remember": True}, headers=auth)
+            seen.append(response.text)
+            seen.append(json.dumps(dict(response.headers)))
+    assert any("internal_error" in text for text in seen)  # the unexpected failure was exercised
+    assert secret not in "\n".join(seen)
+    # log.exception() records the traceback text, which must not carry the token either
+    assert secret not in caplog.text
+
+
+def test_someone_elses_session_cannot_be_continued_or_cleared_through_the_stream() -> None:
+    chat = Scripted(AssistantTurn("一"))
+    client, _ = build(chat=chat)
+    sid = client.post("/ask", json={"question": "q", "remember": True}, headers=AUTH).json()[
+        "session_id"
+    ]
+    other = {"Authorization": "Bearer another-users-token"}
+    stolen = client.post("/ask/stream", json={"question": "x", "session_id": sid}, headers=other)
+    assert stolen.status_code == 404 and "text/event-stream" not in stolen.headers["content-type"]
+    assert client.app.state.sessions.history(sid, TOKEN) == [("q", "一")]

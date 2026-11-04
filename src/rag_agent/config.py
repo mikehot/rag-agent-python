@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # "off" (default) or "console": spans to standard output, never any user text or secret.
     tracing: Literal["off", "console"] = "off"
 
+    # Largest request body accepted. A question is at most 2000 characters (12 KB even when every
+    # one is escaped as \\uXXXX), so this only stops bodies that are meant to exhaust memory.
+    max_body_bytes: int = 65536
+
     session_ttl_seconds: float = 1800.0
     max_sessions: int = 1000
 

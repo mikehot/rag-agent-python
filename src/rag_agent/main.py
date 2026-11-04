@@ -67,7 +67,14 @@ def bearer_token(authorization: str | None) -> str | None:
         return None
     scheme, _, value = authorization.partition(" ")
     value = value.strip()
-    return value if scheme.lower() == "bearer" and value else None
+    if scheme.lower() != "bearer" or not value:
+        return None
+    # A token is forwarded as an HTTP header value, so it must be visible ASCII without spaces.
+    # Anything else (a latin-1 byte, a control character) cannot be a real token and would make
+    # the knowledge-base client raise an encoding error, which surfaced as an HTTP 500.
+    if not (value.isascii() and value.isprintable() and " " not in value):
+        return None
+    return value
 
 
 def cited_filenames(result: AgentResult) -> list[str]:
@@ -91,6 +98,57 @@ def to_response(result: AgentResult, session_id: str | None = None) -> AskRespon
 
 def error(status: int, code: str, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code, "detail": detail})
+
+
+class BodyLimit:
+    """Reject request bodies over ``limit`` bytes with 413, before FastAPI buffers and parses them.
+
+    Checks the declared Content-Length first and counts the bytes of chunked bodies as they arrive,
+    so a body without a Content-Length cannot get past it.
+    """
+
+    def __init__(self, app, limit: int) -> None:
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        too_large = JSONResponse(
+            status_code=413,
+            content={"error": "request_too_large", "detail": "the request body is too large"},
+        )
+        declared = dict(scope["headers"]).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.limit:
+            await too_large(scope, receive, send)
+            return
+        seen = 0
+        rejected = False
+
+        async def limited_receive():
+            nonlocal seen, rejected
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > self.limit:
+                    rejected = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def guarded_send(message) -> None:
+            if rejected and message["type"] == "http.response.start":
+                await too_large(scope, receive, send)
+                raise _Dropped
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except _Dropped:
+            return
+
+
+class _Dropped(Exception):
+    pass
 
 
 def create_app(
@@ -121,11 +179,12 @@ def create_app(
     runner = run_graph_agent if settings.engine == "graph" else run_agent
     app = FastAPI(title="rag-agent-python", version=__version__)
     app.state.settings = settings
+    app.add_middleware(BodyLimit, limit=settings.max_body_bytes)
     app.state.sessions = sessions
 
     def prepare(request: AskRequest, authorization: str | None):
-        """Authenticate and resolve the conversation. Returns (token, session_id, history) or an
-        error response."""
+        """Authenticate and resolve the conversation. Returns (token, session_id, history, created)
+        or an error response. ``created`` is true when this request opened the session."""
         token = bearer_token(authorization)
         if token is None:
             return error(
@@ -133,6 +192,7 @@ def create_app(
             )
         session_id: str | None = None
         history = None
+        created = False
         if request.session_id is not None:
             history = sessions.history(request.session_id, token)
             if history is None:
@@ -141,7 +201,15 @@ def create_app(
         elif request.remember:
             session_id = sessions.create(token)
             history = []
-        return token, session_id, history
+            created = True
+        return token, session_id, history, created
+
+    def discard_if_new(session_id: str | None, token: str, created: bool) -> None:
+        # The session exists before the knowledge base has judged the token. When it rejects it,
+        # nothing may be left behind: the entry could never be used, and a flood of bogus tokens
+        # would otherwise push real sessions out of the bounded store.
+        if created and session_id is not None:
+            sessions.forget(session_id, token)
 
     def execute(request: AskRequest, token: str, history, on_event=None) -> AgentResult:
         with telemetry.tracer().start_as_current_span("agent.ask") as span:
@@ -178,7 +246,7 @@ def create_app(
         return error(502, "knowledge_base_unavailable", "the knowledge base could not be reached")
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok", "service": "rag-agent-python", "version": __version__}
 
     @app.post("/ask", response_model=AskResponse)
@@ -186,11 +254,12 @@ def create_app(
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
             return prepared
-        token, session_id, history = prepared
+        token, session_id, history, created = prepared
         request_id = uuid.uuid4().hex[:12]
         try:
             result = execute(request, token, history)
         except McpError as exc:
+            discard_if_new(session_id, token, created)  # the error carries no session id
             return failure(exc, request_id)
         log.info(
             "request=%s stop=%s turns=%s tools=%s",
@@ -200,6 +269,7 @@ def create_app(
             len(result.trace),
         )
         if result.stop_reason == "model_error":
+            discard_if_new(session_id, token, created)
             return error(502, "model_unavailable", "the language model did not respond")
         remember_turn(request, token, session_id, result)
         return to_response(result, session_id)
@@ -215,7 +285,7 @@ def create_app(
         prepared = prepare(request, authorization)
         if isinstance(prepared, JSONResponse):
             return prepared
-        token, session_id, history = prepared
+        token, session_id, history, created = prepared
         request_id = uuid.uuid4().hex[:12]
         events: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
@@ -237,6 +307,8 @@ def create_app(
                     events.put(("answer", to_response(result, session_id).model_dump()))
             except McpError as exc:
                 response = failure(exc, request_id)
+                if response.status_code == 401:
+                    discard_if_new(session_id, token, created)
                 events.put(("error", json.loads(response.body)))
             except Exception:  # the stream must always end with an event
                 log.exception("request=%s unexpected failure", request_id)
