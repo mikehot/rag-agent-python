@@ -12,6 +12,7 @@ from contextlib import AbstractContextManager
 from typing import Any
 
 from fastapi import FastAPI, Header, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -219,10 +220,14 @@ def create_app(
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_seconds,
     )
-    sessions = sessions or SessionStore(
-        ttl_seconds=settings.session_ttl_seconds,
-        max_sessions=settings.max_sessions,
-        max_sessions_per_owner=settings.max_sessions_per_owner,
+    sessions = (
+        sessions
+        if sessions is not None
+        else SessionStore(
+            ttl_seconds=settings.session_ttl_seconds,
+            max_sessions=settings.max_sessions,
+            max_sessions_per_owner=settings.max_sessions_per_owner,
+        )
     )
     limits = Limits(
         max_turns=settings.max_turns,
@@ -230,10 +235,21 @@ def create_app(
         enforce_retrieval=settings.enforce_retrieval,
     )
     runner = run_graph_agent if settings.engine == "graph" else run_agent
-    app = FastAPI(title="rag-agent-python", version=__version__)
+    app = FastAPI(
+        title="rag-agent-python",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.settings = settings
     app.add_middleware(BodyLimit, limit=settings.max_body_bytes)
     app.state.sessions = sessions
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request: Any, _exc: RequestValidationError) -> JSONResponse:
+        return error(422, "invalid_request", "request validation failed")
+
     gate = (
         threading.BoundedSemaphore(settings.max_concurrent_asks)
         if (settings.max_concurrent_asks > 0)
@@ -374,7 +390,11 @@ def create_app(
         """
         if not try_acquire():
             return busy()
-        prepared = prepare(request, authorization)
+        try:
+            prepared = prepare(request, authorization)
+        except BaseException:
+            release()
+            raise
         if isinstance(prepared, JSONResponse):
             release()
             return prepared
@@ -432,7 +452,11 @@ def create_app(
                 yield sse(*item)
             yield sse("done", {})
 
-        threading.Thread(target=work, daemon=True).start()
+        try:
+            threading.Thread(target=work, daemon=True).start()
+        except BaseException:
+            release()
+            raise
         return CancelOnExit(
             stream(),
             cancel,

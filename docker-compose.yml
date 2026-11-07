@@ -16,7 +16,7 @@ services:
     image: rag-agent-python:local
     container_name: rag-agent-python
     ports:
-      - "8090:8090"
+      - "${RAG_AGENT_BIND_HOST:-127.0.0.1}:8090:8090"
     environment:
       RAG_AGENT_KB_BASE_URL: ${RAG_AGENT_KB_BASE_URL:-http://host.docker.internal:8080}
       RAG_AGENT_LLM_BASE_URL: ${RAG_AGENT_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
