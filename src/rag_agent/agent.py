@@ -303,7 +303,9 @@ def _execute_call(
         return 0
     try:
         tool_result = tools_backend.call_tool(call.name, arguments)
-    except McpError:
+    except McpError as exc:
+        if exc.status in (401, 403):
+            raise
         result.trace.append(ToolTrace(call.name, arguments, "transport_error", True))
         messages.append(tool_message(call.id, "error: the knowledge base is unavailable"))
         return 1

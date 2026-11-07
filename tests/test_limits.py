@@ -273,3 +273,32 @@ def test_the_app_applies_the_owner_quota_from_settings() -> None:
             == 200
         )
     assert len(client.app.state.sessions) == 2
+
+
+def test_ask_stream_releases_its_concurrency_slot_if_prepare_raises() -> None:
+    from fastapi.testclient import TestClient
+
+    from test_app import AUTH, Scripted
+
+    store = SessionStore()
+    app = create_app(
+        Settings(kb_base_url="http://kb.invalid", max_concurrent_asks=1),
+        kb_factory=lambda url, token, timeout: FakeKb(token),
+        chat=Scripted(AssistantTurn("好")),
+        sessions=store,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    orig_create = store.create
+
+    def boom(token: str) -> str:
+        raise RuntimeError("session store failure")
+
+    store.create = boom  # type: ignore[method-assign]
+    r1 = client.post("/ask/stream", json={"question": "q", "remember": True}, headers=AUTH)
+    assert r1.status_code == 500
+
+    store.create = orig_create  # type: ignore[method-assign]
+    r2 = client.post("/ask/stream", json={"question": "q"}, headers=AUTH)
+    assert r2.status_code == 200
+    assert "event: answer" in r2.text

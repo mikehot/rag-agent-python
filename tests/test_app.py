@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from rag_agent import __version__
@@ -135,6 +136,23 @@ def test_token_rejected_by_the_knowledge_base_is_a_401() -> None:
     assert response.status_code == 401 and response.json()["error"] == "unauthorized"
 
 
+@pytest.mark.parametrize("engine", ["loop", "graph"])
+def test_token_rejected_during_tool_call_is_a_401_and_discards_new_session(engine: str) -> None:
+    class RejectOnCallKb(FakeKb):
+        def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
+            raise McpError("tools/call: HTTP 401", status=401)
+
+    call = ToolCall("c1", "search_knowledge", json.dumps({"query": "q"}))
+    client, _ = build(
+        RejectOnCallKb(TOKEN),
+        chat=Scripted(AssistantTurn(None, [call])),
+        engine=engine,
+    )
+    response = client.post("/ask", json={"question": "q", "remember": True}, headers=AUTH)
+    assert response.status_code == 401 and response.json()["error"] == "unauthorized"
+    assert len(client.app.state.sessions) == 0
+
+
 def test_unreachable_knowledge_base_is_a_502() -> None:
     kb = FakeKb(TOKEN, fail=McpError("transport error"))
     client, _ = build(kb, chat=Scripted())
@@ -160,8 +178,14 @@ def test_a_run_that_hits_its_limits_is_200_with_answered_false() -> None:
 
 def test_empty_and_overlong_questions_are_rejected() -> None:
     client, _ = build(chat=Scripted())
-    assert client.post("/ask", json={"question": ""}, headers=AUTH).status_code == 422
-    assert client.post("/ask", json={"question": "a" * 2001}, headers=AUTH).status_code == 422
+    r_empty = client.post("/ask", json={"question": ""}, headers=AUTH)
+    assert r_empty.status_code == 422 and r_empty.json()["error"] == "invalid_request"
+    overlong = "secret-marker-" + "a" * 2001
+    r_long = client.post("/ask", json={"question": overlong}, headers=AUTH)
+    assert r_long.status_code == 422 and r_long.json()["error"] == "invalid_request"
+    assert "secret-marker-" not in r_long.text
+    assert client.get("/docs").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
 
 
 def test_bearer_token_parsing() -> None:
