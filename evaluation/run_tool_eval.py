@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -81,7 +82,12 @@ def main() -> int:
         json.loads(line) for line in args.dataset.read_text(encoding="utf-8").splitlines() if line
     ]
     creds = json.loads(args.credentials.read_text(encoding="utf-8"))
-    chat = ChatClient(base_url=args.llm_base_url, model=args.model)
+    chat = ChatClient(
+        base_url=args.llm_base_url,
+        model=args.model,
+        api_key=os.environ.get("RAG_AGENT_LLM_API_KEY", ""),
+        reasoning_effort=os.environ.get("RAG_AGENT_LLM_REASONING_EFFORT", ""),
+    )
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     per_run = []

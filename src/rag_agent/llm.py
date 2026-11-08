@@ -65,6 +65,7 @@ class ChatClient:
     base_url: str
     model: str
     api_key: str = field(default="", repr=False)
+    reasoning_effort: str = ""
     temperature: float | None = 0.0
     max_tokens: int = 1200
     timeout: float = 120.0
@@ -82,6 +83,8 @@ class ChatClient:
             body["tools"] = tools
         if self.temperature is not None:
             body["temperature"] = self.temperature
+        if self.reasoning_effort and self.reasoning_effort.strip():
+            body["reasoning_effort"] = self.reasoning_effort.strip()
         if stream:
             body["stream"] = True
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

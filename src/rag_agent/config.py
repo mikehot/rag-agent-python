@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:1234/v1"
     llm_model: str = "google/gemma-4-26b-a4b-qat"
     llm_api_key: str = ""
+    llm_reasoning_effort: str = ""
     llm_timeout_seconds: float = 120.0
 
     # "loop" is the reference implementation; "graph" is the same agent as a LangGraph StateGraph.

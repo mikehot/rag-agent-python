@@ -40,6 +40,8 @@ def main() -> int:
     chat = ChatClient(
         base_url=os.environ.get("RAG_AGENT_LLM_BASE_URL", "http://localhost:1234/v1"),
         model=os.environ.get("RAG_AGENT_LLM_MODEL", "google/gemma-4-26b-a4b-qat"),
+        api_key=os.environ.get("RAG_AGENT_LLM_API_KEY", ""),
+        reasoning_effort=os.environ.get("RAG_AGENT_LLM_REASONING_EFFORT", ""),
     )
     rows = []
     for actor, question, expect in CASES:
