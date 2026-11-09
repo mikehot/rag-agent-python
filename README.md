@@ -11,9 +11,7 @@ orchestration, tool selection, and evaluating whether the agent calls tools corr
 
 ## Status
 
-A working service with small, pre-registered evaluations. It runs locally against a local model; there is
-no hosted deployment, and every number below comes from datasets of 5 to 27 cases written by one person,
-scored by literal string matching, on one model (Gemma 4 26B, Thinking off).
+A working service with small, pre-registered evaluations. It runs locally against a local model (Gemma 4 26B, Thinking off) or an OpenAI-compatible cloud model (`GLM-5.3-Flash-Event` with `RAG_AGENT_LLM_REASONING_EFFORT=none`); there is no hosted deployment, and every number below comes from datasets of 5 to 27 cases written by one person and scored by literal string matching.
 
 | Piece | State |
 |---|---|
@@ -24,16 +22,16 @@ scored by literal string matching, on one model (Gemma 4 26B, Thinking off).
 | LangGraph version of the same agent | done: `RAG_AGENT_ENGINE=graph`; identical to the loop on scripted scenarios (including remembered conversations); same pass counts on 5 live sets; see [the report](evaluation/reports/langgraph-local-2026-10-14.md) |
 | Tool-call evaluation | done: 26 dev + 27 held-out cases, one run per cell; see [the report](evaluation/reports/tool-calls-v1-local-2026-10-14.md) |
 | Cross-document questions | done, **opt-in**: `RAG_AGENT_POLICY=decompose`. On 12 compound questions the Java single retrieval passed 6, the agent 9, decomposition 12, with the held-out control unchanged (26/27); an observation on twelve questions, not an established effect ([report](evaluation/reports/cross-document-decomposition-local-2026-10-14.md)) |
-| Conversation memory | done, opt-in, in-process; follow-ups 5/8 with a session vs 2/8 without ([report](evaluation/reports/multi-turn-local-2026-10-14.md)) |
+| Conversation memory | done, opt-in, in-process; follow-ups 5/8 with a session vs 2/8 without on local Gemma 4 26B ([report](evaluation/reports/multi-turn-local-2026-10-14.md)), and 6/8 × 3 runs on cloud `GLM-5.3-Flash-Event` ([report](evaluation/reports/glm-5.3-flash-eval-2026-11-07.md)) |
 | Retrieval enforced on every remembered turn | done: revoked-document repeat 3/3 off, 0/3 on, three valid cases ([report](evaluation/reports/enforce-retrieval-local-2026-10-15.md)) |
+| Cloud model evaluation (`GLM-5.3-Flash-Event`) | done (Pre-flight `8/8` + Cell C `multi_turn_v2` × 3 runs): Turn 2 session accuracy 6/8 (`enforced=off`) and 5.33/8 (`enforced=on`), 95.8% spontaneous Turn-2 re-retrieval even with `enforced=off`, 0 ACL leaks across all 6 runs ([report](evaluation/reports/glm-5.3-flash-eval-2026-11-07.md)) |
 | OpenTelemetry tracing | done: allow-listed attributes only, console output only (no network exporter) |
 | Docker / compose | done: non-root, read-only filesystem, health check; one-command stack with the Java repository |
 | CI | `uv sync --locked`, `ruff check`, `ruff format --check`, `pytest` on pushes to `main` and on every pull request |
 | Demo | scripted drivers (`scripts/demo.py`, `scripts/demo_admin.py`) and a silent 3 min 47 s terminal recording in the Java repository ([notes](docs/DEMO_VIDEO.md)) |
 
 **Not done:** a network trace exporter; a session store shared between processes (sessions are
-in-process, so several replicas are untested); per-client rate limiting and any load test (a global concurrency cap and per-owner session quota exist, both described below); evaluation on a second
-model; a larger or independently written test set; and the fixed refusal after a failed retry has never
+in-process, so several replicas are untested); per-client rate limiting and any load test (a global concurrency cap and per-owner session quota exist, both described below); Cells B (`cross_document_v1`) and D (`revocation_v1`) on a second/third model; a larger or independently written test set; and the fixed refusal after a failed retry has never
 been triggered by a live model.
 
 ## Try it
@@ -146,10 +144,11 @@ The full account, including what the numbers do not show, is in the
 
 1. ~~MCP client with contract tests~~, ~~bounded agent loop~~, ~~tool-call evaluation~~, ~~held-out set~~.
 2. ~~`POST /ask`, LangGraph version, streaming, opt-in memory, tracing, Docker, demo recording~~.
-3. Open: repeats that include a model-server restart; the wrong "not in the knowledge base" answers
-   (H2-05); a second model on the same sets; a session store that survives more than one process.
+3. ~~Cloud model evaluation on `multi_turn_v2` and tool-call pre-flight (`GLM-5.3-Flash-Event`)~~.
+4. Open: repeats that include a model-server restart; the wrong "not in the knowledge base" answers
+   (H2-05); Cells B (`cross_document_v1`) and D (`revocation_v1`) on a second/third model; a session store that survives more than one process.
 
-Everything runs locally against a local model. No hosted service is assumed.
+Everything runs locally against a local model or a configured OpenAI-compatible endpoint. No hosted deployment of this service is assumed.
 
 ## Development
 
@@ -173,10 +172,11 @@ uv run python evaluation/run_tool_eval.py --dataset evaluation/datasets/tool_cal
 ```
 
 Configuration comes from `RAG_AGENT_*` environment variables (see `src/rag_agent/config.py`).
-The limits-related ones:
+The limits and reasoning-related ones:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `RAG_AGENT_LLM_REASONING_EFFORT` | `""` | Sent as `reasoning_effort` in chat-completion requests when non-empty (e.g. `"none"` to disable thinking per request on LM Studio or `GLM-5.3-Flash-Event`) |
 | `RAG_AGENT_MAX_SESSIONS` | `1000` | Sessions held in memory in total; the oldest is dropped when full |
 | `RAG_AGENT_MAX_SESSIONS_PER_OWNER` | `20` | Sessions one token may hold; at the limit that token's **own** least recently used session is dropped, never another user's. `0` = no per-owner limit |
 | `RAG_AGENT_MAX_CONCURRENT_ASKS` | `0` | Most `/ask` and `/ask/stream` requests running at once; extra ones get `429` with `Retry-After`. `0` = unlimited (the previous behaviour). `/health` is never counted. Keep it below 40, the size of the server's worker pool |

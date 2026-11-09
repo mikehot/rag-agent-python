@@ -3,6 +3,7 @@
 Pre-registered in [`glm-5.3-flash-preregistration-2026-11-07.md`](glm-5.3-flash-preregistration-2026-11-07.md) before any run.
 Java backend Cell A (`corpus_v2.jsonl`, 57 cases × 3 runs) and the LLM-as-Judge semantic audit are recorded in
 `rag-knowledge-base/evaluation/reports/glm-5.3-flash-corpus-v2-cloud-2026-11-07.md` (`45/45`, `44/45`, `45/45`, mean `44.67/45`, `DISTINGUISHABLE` vs Gemma 4 26B).
+This report records the Python agent pre-flight (`probe_agent.py`) and **Cell C (`multi_turn_v2.jsonl`, 3 runs × 2 modes)**; pre-registered Cells B (`cross_document_v1.jsonl`) and D (`revocation_v1.jsonl`) were not executed in this run window.
 
 ---
 
@@ -28,8 +29,8 @@ Result: **8 / 8 passed on first run** (native OpenAI `tool_calls` emitted, zero 
 ## 2. Cell C: Multi-Turn Conversation & Session Memory (`multi_turn_v2.jsonl`, 3 runs × 2 modes)
 
 Ran 3 repeated runs of `multi_turn_v2.jsonl` (8 positive follow-up conversations + 2 negative/ACL-boundary conversations) against two agent instances:
-- **`enforced=off`** (`RAG_AGENT_MEMORY_ENFORCE_RETRIEVAL=false` on port 18091)
-- **`enforced=on`** (`RAG_AGENT_MEMORY_ENFORCE_RETRIEVAL=true` on port 18090)
+- **`enforced=off`** (`RAG_AGENT_ENFORCE_RETRIEVAL=false` on port 18091)
+- **`enforced=on`** (`RAG_AGENT_ENFORCE_RETRIEVAL=true` on port 18090)
 
 ### Results Across 3 Runs (`GLM-5.3-Flash-Event` vs Local `Gemma 4 26B` Baseline)
 
