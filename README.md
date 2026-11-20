@@ -77,7 +77,8 @@ curl -s -X DELETE localhost:8090/sessions/<id> -H "Authorization: Bearer $KB_TOK
   what `cited_documents` is computed from.
 - **Nothing is remembered unless asked.** A session holds earlier questions and final answers only (never
   tool output), is bound to the token that created it, and expires (default 30 minutes, 6 turns, in memory).
-  Retrieval runs again every turn with the caller's current permissions, and now it is **enforced**: in a
+  Set `RAG_AGENT_SESSION_DB_PATH` (e.g. `/tmp/rag_agent_sessions.db`) to persist sessions and the owner-hash
+  salt in SQLite (WAL mode) across process restarts. Retrieval runs again every turn with the caller's current permissions, and now it is **enforced**: in a
   conversation with earlier turns a final reply is accepted only after a successful retrieval in the
   current turn (one changed retry, then a fixed refusal with `stop_reason="no_retrieval"`; no text is
   streamed before the first retrieval). With enforcement off, a model asked to repeat a document that

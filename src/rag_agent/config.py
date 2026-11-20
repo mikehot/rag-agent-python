@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # Most sessions one token may hold; at the limit its own oldest is dropped, never another
     # owner's. 0 = no per-owner limit.
     max_sessions_per_owner: int = Field(default=20, ge=0)
+    # Optional SQLite file path to persist sessions across restarts / workers; empty = in-memory.
+    session_db_path: str = ""
 
     # Most /ask and /ask/stream requests running at once; the rest get 429 + Retry-After.
     # 0 (default) = unlimited, i.e. the behaviour of every earlier version.

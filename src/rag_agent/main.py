@@ -22,7 +22,7 @@ from rag_agent.config import Settings, unknown_settings
 from rag_agent.graph import run_graph_agent
 from rag_agent.llm import ChatClient
 from rag_agent.mcp_client import McpClient, McpError
-from rag_agent.sessions import SessionStore
+from rag_agent.sessions import SessionStore, SqliteSessionStore
 
 log = logging.getLogger("rag_agent")
 
@@ -221,15 +221,21 @@ def create_app(
         reasoning_effort=settings.llm_reasoning_effort,
         timeout=settings.llm_timeout_seconds,
     )
-    sessions = (
-        sessions
-        if sessions is not None
-        else SessionStore(
-            ttl_seconds=settings.session_ttl_seconds,
-            max_sessions=settings.max_sessions,
-            max_sessions_per_owner=settings.max_sessions_per_owner,
-        )
-    )
+    if sessions is None:
+        db_path = settings.session_db_path.strip()
+        if db_path:
+            sessions = SqliteSessionStore(
+                db_path,
+                ttl_seconds=settings.session_ttl_seconds,
+                max_sessions=settings.max_sessions,
+                max_sessions_per_owner=settings.max_sessions_per_owner,
+            )
+        else:
+            sessions = SessionStore(
+                ttl_seconds=settings.session_ttl_seconds,
+                max_sessions=settings.max_sessions,
+                max_sessions_per_owner=settings.max_sessions_per_owner,
+            )
     limits = Limits(
         max_turns=settings.max_turns,
         max_tool_calls=settings.max_tool_calls,
