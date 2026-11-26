@@ -166,9 +166,7 @@ class SqliteSessionStore:
         if row is not None:
             return bytes(row[0])
         salt = secrets.token_bytes(32)
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('salt', ?)", (salt,)
-        )
+        self._conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('salt', ?)", (salt,))
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'salt'").fetchone()
         assert row is not None
         return bytes(row[0])
