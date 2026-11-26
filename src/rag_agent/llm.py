@@ -196,7 +196,7 @@ class ChatClient:
                 raise TypeError
         except (ValueError, KeyError, IndexError, TypeError):
             raise LlmError("model server returned a malformed completion") from None
-        calls = []
+        calls: list[ToolCall] = []
         for raw in raw_calls:
             try:
                 function = raw["function"]

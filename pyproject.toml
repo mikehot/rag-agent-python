@@ -16,6 +16,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.15,<2",
     "pytest>=9.1,<10",
     "ruff>=0.17,<0.18",
 ]
@@ -40,3 +41,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # The knowledge base and its questions are Chinese; full-width punctuation is intentional.
 ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

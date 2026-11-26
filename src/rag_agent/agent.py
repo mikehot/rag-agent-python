@@ -113,7 +113,7 @@ def model_turn(
         telemetry.set_attributes(
             span, llm__model=str(getattr(chat, "model", "unknown")), llm__streaming=streaming
         )
-        if streaming:
+        if on_event is not None and hasattr(chat, "complete_stream"):
             turn = chat.complete_stream(
                 messages, tools, lambda text: on_event({"type": "delta", "text": text})
             )

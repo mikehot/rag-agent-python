@@ -207,7 +207,7 @@ def create_app(
     settings: Settings | None = None,
     kb_factory: KbFactory | None = None,
     chat: ChatBackend | None = None,
-    sessions: SessionStore | None = None,
+    sessions: SessionStore | SqliteSessionStore | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     telemetry.configure(settings.tracing)
@@ -221,21 +221,24 @@ def create_app(
         reasoning_effort=settings.llm_reasoning_effort,
         timeout=settings.llm_timeout_seconds,
     )
+    store: SessionStore | SqliteSessionStore
     if sessions is None:
         db_path = settings.session_db_path.strip()
         if db_path:
-            sessions = SqliteSessionStore(
+            store = SqliteSessionStore(
                 db_path,
                 ttl_seconds=settings.session_ttl_seconds,
                 max_sessions=settings.max_sessions,
                 max_sessions_per_owner=settings.max_sessions_per_owner,
             )
         else:
-            sessions = SessionStore(
+            store = SessionStore(
                 ttl_seconds=settings.session_ttl_seconds,
                 max_sessions=settings.max_sessions,
                 max_sessions_per_owner=settings.max_sessions_per_owner,
             )
+    else:
+        store = sessions
     limits = Limits(
         max_turns=settings.max_turns,
         max_tool_calls=settings.max_tool_calls,
@@ -251,7 +254,7 @@ def create_app(
     )
     app.state.settings = settings
     app.add_middleware(BodyLimit, limit=settings.max_body_bytes)
-    app.state.sessions = sessions
+    app.state.sessions = store
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Any, _exc: RequestValidationError) -> JSONResponse:
@@ -290,12 +293,12 @@ def create_app(
         history = None
         created = False
         if request.session_id is not None:
-            history = sessions.history(request.session_id, token)
+            history = store.history(request.session_id, token)
             if history is None:
                 return error(404, "session_not_found", "unknown or expired session")
             session_id = request.session_id
         elif request.remember:
-            session_id = sessions.create(token)
+            session_id = store.create(token)
             history = []
             created = True
         return token, session_id, history, created
@@ -305,7 +308,7 @@ def create_app(
         # nothing may be left behind: the entry could never be used, and a flood of bogus tokens
         # would otherwise push real sessions out of the bounded store.
         if created and session_id is not None:
-            sessions.forget(session_id, token)
+            store.forget(session_id, token)
 
     def execute(
         request: AskRequest, token: str, history, on_event=None, cancel=None
@@ -319,6 +322,8 @@ def create_app(
                 agent__has_history=bool(history),
             )
             with kb_factory(settings.kb_base_url, token, settings.request_timeout_seconds) as kb:
+                kb_: Any
+                chat_: Any
                 if cancel is not None:
                     kb_, chat_ = _CancelAware(kb, cancel), _CancelAware(chat, cancel)
                 else:
@@ -338,7 +343,7 @@ def create_app(
 
     def remember_turn(request: AskRequest, token: str, session_id: str | None, result) -> None:
         if session_id is not None and result.stop_reason == "answered":
-            sessions.append(session_id, token, request.question, result.answer)
+            store.append(session_id, token, request.question, result.answer)
 
     def failure(exc: McpError, request_id: str) -> JSONResponse:
         # Never log the question or the token; the status and our own request id are enough.
@@ -478,7 +483,7 @@ def create_app(
             return error(
                 401, "unauthorized", "send the knowledge-base bearer token as 'Authorization'"
             )
-        if not sessions.forget(session_id, token):
+        if not store.forget(session_id, token):
             return error(404, "session_not_found", "unknown or expired session")
         return Response(status_code=204)
 
