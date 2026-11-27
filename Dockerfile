@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build: dependencies come from uv.lock only (--locked), so the image cannot drift from CI.
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
@@ -9,7 +9,7 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 # Run as an unprivileged user; nothing in this service needs to write to disk.
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin agent
 WORKDIR /app
